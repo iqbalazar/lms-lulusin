@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import time
 import base64
 import io
+import pytz 
 
 # MENGGUNAKAN LIBSQL (TURSO)
 import libsql_experimental as sqlite3 
@@ -19,12 +20,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM CSS (LAYOUT RAPI & DEFAULT COLOR FRIENDLY) ---
+# --- HELPER TIMEZONE (WIB / GMT+7) ---
+def get_wib_now():
+    # Mengambil waktu server UTC lalu convert ke Asia/Jakarta
+    return datetime.now(pytz.timezone('Asia/Jakarta')).replace(tzinfo=None)
+
+# --- CUSTOM CSS (TAMPILAN RAPI & BUTTON FIXED) ---
 st.markdown("""
 <style>
     /* === 1. GLOBAL STYLE === */
     html, body, [class*="css"] {
-        font-family: 'Segoe UI', Roboto, sans-serif;
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     }
 
     /* === 2. LOGIN & CARD CONTAINER === */
@@ -34,6 +40,7 @@ st.markdown("""
         border-radius: 12px;
         padding: 25px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        background-color: var(--bg-card);
     }
 
     /* === 3. KARTU SOAL (QUESTION CARD) === */
@@ -75,6 +82,7 @@ st.markdown("""
         border: 1px solid rgba(128,128,128,0.2) !important;
         margin: 0px !important;
     }
+    
     /* Hover effect khusus */
     button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
     button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
@@ -88,12 +96,6 @@ st.markdown("""
         font-weight: 600;
         border-radius: 8px;
     }
-    
-    /* Variabel Warna untuk Tombol Navigasi (Fallback jika CSS gagal) */
-    :root {
-        --btn-edit-bg: #FFC107; 
-        --btn-delete-bg: #E53935;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,7 +103,7 @@ st.markdown("""
 # 2. DATABASE MANAGER (VERSI TURSO / LIBSQL)
 # ==========================================
 
-@st.cache_resource
+@st.cache_resource(ttl=3600)
 def get_db_connection():
     # Ambil kredensial dari secrets.toml
     try:
@@ -114,7 +116,7 @@ def get_db_connection():
         return None
 
 def run_query(query, params=()):
-    """Helper function untuk menjalankan query di Turso/LibSQL"""
+    """Helper function untuk menjalankan query di Turso/LibSQL dengan aman"""
     conn = get_db_connection()
     if not conn: return None
     
@@ -208,21 +210,31 @@ def delete_material(mid):
     run_query("DELETE FROM materials WHERE id=?", (mid,))
 
 def get_exams():
+    # Ambil semua data ujian
     rows = run_query("SELECT * FROM exams")
     formatted_exams = []
+    
+    # Formatting detail untuk UI
     for r in rows:
         # Bersihkan opsi kosong/None
         raw_opsi = [r['opt_a'], r['opt_b'], r['opt_c'], r['opt_d'], r['opt_e']]
         raw_imgs = [r['opt_a_img'], r['opt_b_img'], r['opt_c_img'], r['opt_d_img'], r['opt_e_img']]
+        
         valid_opsi, valid_imgs = [], []
         for i in range(len(raw_opsi)):
             if raw_opsi[i] and str(raw_opsi[i]).strip() != "":
-                valid_opsi.append(raw_opsi[i]); valid_imgs.append(raw_imgs[i])
+                valid_opsi.append(raw_opsi[i])
+                valid_imgs.append(raw_imgs[i])
+        
         formatted_exams.append({
-            "id": r['id'], "category": r['category'], 
+            "id": r['id'], 
+            "category": r['category'], 
             "sub_category": r['sub_category'] if 'sub_category' in r and r['sub_category'] else "Umum", 
-            "tanya": r['question'], "q_img": r['q_image'], 
-            "opsi": valid_opsi, "opsi_img": valid_imgs, "jawaban": r['answer']
+            "tanya": r['question'], 
+            "q_img": r['q_image'], 
+            "opsi": valid_opsi, 
+            "opsi_img": valid_imgs, 
+            "jawaban": r['answer']
         })
     return formatted_exams
 
@@ -234,12 +246,14 @@ def add_exam(cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d
     # Pastikan None jika string kosong untuk D dan E
     op_d = None if not op_d or str(op_d).strip() == "" else op_d
     op_e = None if not op_e or str(op_e).strip() == "" else op_e
+    
     run_query('''INSERT INTO exams (category, sub_category, question, q_image, opt_a, opt_a_img, opt_b, opt_b_img, opt_c, opt_c_img, opt_d, opt_d_img, opt_e, opt_e_img, answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
               (cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans))
 
 def update_exam_data(eid, cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans):
     op_d = None if not op_d or str(op_d).strip() == "" else op_d
     op_e = None if not op_e or str(op_e).strip() == "" else op_e
+    
     run_query("""UPDATE exams SET category=?, sub_category=?, question=?, q_image=?, opt_a=?, opt_a_img=?, opt_b=?, opt_b_img=?, opt_c=?, opt_c_img=?, opt_d=?, opt_d_img=?, opt_e=?, opt_e_img=?, answer=? WHERE id=?""", 
               (cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans, eid))
 
@@ -257,7 +271,8 @@ def get_schedule(category):
     return res[0] if res else None
 
 def start_student_exam(student_name, category): 
-    run_query("INSERT INTO student_exam_attempts (student_name, category, start_time) VALUES (?, ?, ?)", (student_name, category, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    # MENGGUNAKAN WIB
+    run_query("INSERT INTO student_exam_attempts (student_name, category, start_time) VALUES (?, ?, ?)", (student_name, category, get_wib_now().strftime("%Y-%m-%d %H:%M:%S")))
 
 def get_student_attempt(student_name, category): 
     res = run_query("SELECT start_time FROM student_exam_attempts WHERE student_name=? AND category=?", (student_name, category))
@@ -294,8 +309,9 @@ def get_latest_student_result(student_name, category):
     res = run_query("SELECT * FROM results WHERE student_name=? AND category=? ORDER BY id DESC LIMIT 1", (student_name, category))
     return res[0] if res else None
 
-def add_banner(b_type, content, image_data): 
-    run_query("INSERT INTO banners (type, content, image_data, created_at) VALUES (?, ?, ?, ?)", (b_type, content, image_data, datetime.now().strftime("%Y-%m-%d")))
+def add_banner(typ, cont, img): 
+    # MENGGUNAKAN WIB
+    run_query("INSERT INTO banners (type, content, image_data, created_at) VALUES (?, ?, ?, ?)", (typ, cont, img, get_wib_now().strftime("%Y-%m-%d")))
 
 def get_banners(): 
     return run_query("SELECT * FROM banners ORDER BY id DESC")
@@ -407,9 +423,9 @@ def show_result_popup(score, correct, total, category):
     </div>
     """, unsafe_allow_html=True)
     if st.button("Tutup & Kembali ke Menu", use_container_width=True, type="primary"):
+        st.session_state['selected_exam_cat'] = None
         if "exam_done" in st.query_params: del st.query_params["exam_done"]
         if "cat" in st.query_params: del st.query_params["cat"]
-        st.session_state['selected_exam_cat'] = None
         st.rerun()
 
 def display_banner_carousel():
@@ -536,8 +552,8 @@ def admin_dashboard():
             
             with st.expander("📅 Pengaturan Jadwal", expanded=False):
                 sch = get_schedule(ac)
-                d_s, d_e = datetime.now().date(), datetime.now().date()
-                t_op, t_cl = datetime.now().time(), (datetime.now()+timedelta(hours=4)).time()
+                d_s, d_e = get_wib_now().date(), get_wib_now().date()
+                t_op, t_cl = get_wib_now().time(), (get_wib_now()+timedelta(hours=4)).time()
                 d_dur, d_max = 60, 1
                 if sch:
                     try:
@@ -595,8 +611,7 @@ def admin_dashboard():
                         q = st.text_area("Pertanyaan")
                         q_img = st.file_uploader("Gambar Soal (Opsional)", type=['png','jpg'])
                         
-                        # Note: Karena st.form, kita tidak bisa pakai st.radio dinamis yang re-run script.
-                        # Jadi kita buat manual 5 slot, tapi user bisa isi 3/4/5.
+                        # Input Opsi Manual
                         st.caption("Isi opsi jawaban. Biarkan kosong jika tidak dipakai (misal hanya A-C).")
                         
                         col_ops1, col_ops2 = st.columns(2)
@@ -609,22 +624,22 @@ def admin_dashboard():
                             oe = st.text_input("Opsi E")
                             ans = st.text_input("Kunci Jawaban (A/B/C/D/E)")
                         
-                        # Upload gambar untuk opsi (opsional, diluar kolom agar rapi)
+                        # Upload gambar untuk opsi
                         with st.expander("Upload Gambar untuk Opsi (Opsional)"):
                             c_img1, c_img2, c_img3, c_img4, c_img5 = st.columns(5)
-                            img_a = c_img1.file_uploader("Img A", type=['png','jpg'], key="ia")
-                            img_b = c_img2.file_uploader("Img B", type=['png','jpg'], key="ib")
-                            img_c = c_img3.file_uploader("Img C", type=['png','jpg'], key="ic")
-                            img_d = c_img4.file_uploader("Img D", type=['png','jpg'], key="id")
-                            img_e = c_img5.file_uploader("Img E", type=['png','jpg'], key="ie")
+                            ia = c_img1.file_uploader("Img A", key="img_a")
+                            ib = c_img2.file_uploader("Img B", key="img_b")
+                            ic = c_img3.file_uploader("Img C", key="img_c")
+                            id = c_img4.file_uploader("Img D", key="img_d")
+                            ie = c_img5.file_uploader("Img E", key="img_e")
 
                         if st.form_submit_button("Simpan Soal"):
                             q_img_val = q_img.getvalue() if q_img else None
-                            img_a_val = img_a.getvalue() if img_a else None
-                            img_b_val = img_b.getvalue() if img_b else None
-                            img_c_val = img_c.getvalue() if img_c else None
-                            img_d_val = img_d.getvalue() if img_d else None
-                            img_e_val = img_e.getvalue() if img_e else None
+                            img_a_val = ia.getvalue() if ia else None
+                            img_b_val = ib.getvalue() if ib else None
+                            img_c_val = ic.getvalue() if ic else None
+                            img_d_val = id.getvalue() if id else None
+                            img_e_val = ie.getvalue() if ie else None
                             
                             add_exam(ac, sub, q, q_img_val, oa, img_a_val, ob, img_b_val, oc, img_c_val, od, img_d_val, oe, img_e_val, ans)
                             st.success("Tersimpan!"); st.rerun()
@@ -707,91 +722,63 @@ def admin_dashboard():
             st.dataframe(df, use_container_width=True)
         else: st.info("Belum ada data nilai.")
 
-    # --- TAB 5: KELOLA USER (LAYOUT ROW-BY-ROW KEMBALI) ---
+    # --- TAB 5: KELOLA USER (LAYOUT ROW-BY-ROW) ---
     with tab5:
+        with st.expander("➕ Tambah User"):
+            with st.form("auf"):
+                u=st.text_input("User"); p=st.text_input("Pass", type="password"); n=st.text_input("Nama"); r=st.selectbox("Role", ["student","admin"])
+                if st.form_submit_button("Simpan"): add_user(u,p,r,n); st.rerun()
+        
+        st.write("### Daftar User")
         dfu = get_all_users()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total User", len(dfu))
-        c2.metric("Admin", len(dfu[dfu['role']=='admin']))
-        c3.metric("Siswa", len(dfu[dfu['role']=='student']))
-        st.write("")
-        
-        with st.expander("➕ Tambah User Baru"):
-            with st.form("add_user"):
-                c1, c2 = st.columns(2)
-                u = c1.text_input("Username"); p = c2.text_input("Password", type="password")
-                n = c1.text_input("Nama Lengkap"); r = c2.selectbox("Role", ["student", "admin"])
-                if st.form_submit_button("Tambah"): add_user(u,p,r,n); st.rerun()
-        
-        st.write("### Daftar Pengguna")
-        st.markdown("---")
-        # Header Table
-        c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 1, 1])
-        c1.markdown("**Username**"); c2.markdown("**Nama**"); c3.markdown("**Role**"); c4.markdown(""); c5.markdown("")
+        c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1]); c1.markdown("**User**"); c2.markdown("**Nama**"); c3.markdown("**Role**")
         st.divider()
         
-        # Loop User dengan Tombol Edit/Delete
+        # Loop User dengan Tombol
         for i, row in dfu.iterrows():
             with st.container():
-                c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 1, 1])
+                c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1])
                 c1.write(row['username'])
                 c2.write(row['name'])
                 c3.markdown(f":red[{row['role']}]" if row['role']=='admin' else f":blue[{row['role']}]")
-                
-                # Button Edit
-                if c4.button("✏️", key=f"eu_{row['username']}"): 
-                    st.session_state['edit_target_user'] = row['username']
-                    st.rerun()
-                
-                # Button Delete
-                if c5.button("🗑️", key=f"du_{row['username']}"):
-                    if row['username'] != st.session_state['current_user']['username']: # Proteksi diri sendiri
-                        delete_user(row['username'])
-                        st.rerun()
-                    else:
-                        st.error("Tidak bisa hapus diri sendiri")
+                if c4.button("✏️", key=f"eu_{row['username']}"): st.session_state['edit_target_user']=row['username']; st.rerun()
+                if c5.button("🗑️", key=f"du_{row['username']}"): 
+                    if row['username'] != st.session_state['current_user']['username']: delete_user(row['username']); st.rerun()
                 st.markdown("---")
         
-        # Form Edit User (Popup Logic)
         if st.session_state['edit_target_user']:
             ud = get_user(st.session_state['edit_target_user'])
             if ud:
-                st.info(f"✏️ Edit User: {ud['username']}")
-                with st.form("edit_u"):
-                    en = st.text_input("Nama", value=ud['name'])
-                    er = st.selectbox("Role", ["student","admin"], index=0 if ud['role']=="student" else 1)
-                    ep = st.text_input("Reset Pass (Isi jika ingin ubah)", type="password")
-                    
-                    c1, c2 = st.columns(2)
-                    if c1.form_submit_button("Simpan"): 
-                        update_user_data(ud['username'], en, er, ep if ep else None)
-                        st.session_state['edit_target_user'] = None
-                        st.success("Updated!"); st.rerun()
-                    if c2.form_submit_button("Batal"):
-                        st.session_state['edit_target_user'] = None
-                        st.rerun()
+                st.info(f"Edit: {ud['username']}")
+                with st.form("euf"):
+                    en=st.text_input("Nama", value=ud['name'])
+                    er=st.selectbox("Role", ["student","admin"], index=0 if ud['role']=="student" else 1)
+                    ep=st.text_input("Reset Pass (Isi jika ingin ubah)", type="password")
+                    if st.form_submit_button("Simpan"): update_user_data(ud['username'],en,er,ep if ep else None); st.session_state['edit_target_user']=None; st.rerun()
+                    if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. DASHBOARD STUDENT
+# 6. STUDENT DASHBOARD
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
     
-    # Auto Check Time Logic
+    # Auto Check Time Logic (Timezone WIB)
     attempts = get_all_student_attempts(user['name'])
     all_qs = get_exams()
     for att in attempts:
         cat = att['category']; sch = get_schedule(cat)
         if sch:
-            dead = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S") + timedelta(minutes=sch['duration_minutes'])
-            if (dead - datetime.now()).total_seconds() <= 0:
+            s_dt = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S")
+            dead = s_dt + timedelta(minutes=sch['duration_minutes'])
+            if (dead - get_wib_now()).total_seconds() <= 0:
                 raw = [e for e in all_qs if e['category'] == cat]
                 ans_data = get_temp_answers_full(user['name'], cat)
                 score = 0
                 for s in raw:
                     if ans_data.get(s['id'], {}).get('answer') == s['jawaban']: score += 1
                 val = (score/len(raw))*100 if len(raw) > 0 else 0
-                add_result(user['name'], cat, val, len(raw), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                add_result(user['name'], cat, val, len(raw), get_wib_now().strftime("%Y-%m-%d %H:%M:%S"))
                 clear_student_attempt(user['name'], cat)
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=cat; st.query_params["u_id"]=user['username']; st.rerun()
 
@@ -831,8 +818,9 @@ def student_dashboard():
                     if sch:
                         od = datetime.strptime(sch['open_time'], "%Y-%m-%d %H:%M:%S")
                         cd = datetime.strptime(sch['close_time'], "%Y-%m-%d %H:%M:%S")
-                        if datetime.now() < od: status_text = "Belum Buka"; status_color = "#e67e22"
-                        elif datetime.now() > cd: status_text = "Ditutup"; status_color = "#c0392b"
+                        now_wib = get_wib_now()
+                        if now_wib < od: stat_txt = "Belum Buka"; stat_col = "#e67e22"
+                        elif now_wib > cd: stat_txt = "Ditutup"; stat_col = "#c0392b"
                     
                     with cols[i%3]:
                         with st.container(border=True):
@@ -860,19 +848,19 @@ def student_dashboard():
                 lim = sch['max_attempts']
                 cnt = get_student_result_count(user['name'], pcat)
                 att = get_student_attempt(user['name'], pcat)
-                now = datetime.now()
+                now_wib = get_wib_now()
 
                 if att:
                     dead = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S") + timedelta(minutes=dur)
-                    if (dead - now).total_seconds() <= 0: trigger_submit = True
+                    if (dead - now_wib).total_seconds() <= 0: trigger_submit = True
                     else:
-                        display_timer_js((dead - now).total_seconds())
+                        display_timer_js((dead - now_wib).total_seconds())
                         show_exam = True
                 else:
                     st.info(f"Riwayat Percobaan: {cnt}/{lim}")
                     if cnt >= lim: st.error("Kesempatan ujian habis.")
-                    elif now < odt: st.warning(f"Ujian dibuka pada: {odt}")
-                    elif now > cdt: st.error("Ujian sudah ditutup.")
+                    elif now_wib < odt: st.warning(f"Ujian dibuka pada: {odt}")
+                    elif now_wib > cdt: st.error("Ujian sudah ditutup.")
                     else:
                         if st.button("🚀 MULAI UJIAN", type="primary"):
                             start_student_exam(user['name'], pcat); st.rerun()
@@ -925,7 +913,7 @@ def student_dashboard():
                 for s in raw:
                     if final.get(s['id'], {}).get('answer') == s['jawaban']: score += 1
                 val = (score/len(raw))*100 if len(raw)>0 else 0
-                add_result(user['name'], pcat, val, len(raw), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                add_result(user['name'], pcat, val, len(raw), get_wib_now().strftime("%Y-%m-%d %H:%M:%S"))
                 clear_student_attempt(user['name'], pcat)
                 st.session_state['selected_exam_cat'] = None
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=pcat; st.query_params["u_id"]=user['username']; st.rerun()
