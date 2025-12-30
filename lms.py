@@ -341,7 +341,7 @@ def admin_dashboard():
                         if c4.button("🗑️", key=f"dm_{r['id']}"): delete_material(r['id']); st.rerun()
             else: st.info("Kosong")
 
-    # --- TAB 2: BANK SOAL ---
+    # --- TAB 2: BANK SOAL (FULL FEATURES: DYNAMIC OPS & IMAGES) ---
     with tab2:
         if not st.session_state['admin_active_category']:
             cats = sorted(list(set([e['category'] for e in get_exams()])))
@@ -448,7 +448,7 @@ def admin_dashboard():
                 c1,c2=st.columns([4,1]); c1.write(f"ID: {b['id']}"); 
                 if c2.button("Hapus", key=f"db_{b['id']}"): delete_banner(b['id']); st.rerun()
 
-    # [FIX] Mencegah Error AttributeError dengan memecah if-else
+    # [FIX] PENGGUNAAN BLOK IF-ELSE STANDAR
     with tab4:
         df = get_results()
         if not df.empty:
@@ -468,7 +468,6 @@ def admin_dashboard():
         c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1]); c1.markdown("**User**"); c2.markdown("**Nama**"); c3.markdown("**Role**")
         st.divider()
         
-        # Loop User dengan Tombol
         for i, row in dfu.iterrows():
             with st.container():
                 c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1])
@@ -497,11 +496,11 @@ def admin_dashboard():
 def student_dashboard():
     user = st.session_state['current_user']
     
-    # [FIX: DEFINISI DATA DI AWAL]
-    all_qs = get_exams() # Penting agar tidak NameError
+    # [FIX: DEFINISI VARIABEL WAJIB]
+    all_qs = get_exams() # Penting didefinisikan sebelum loop
     atts = get_all_student_attempts(user['name'])
     
-    # Check Result Popup
+    # Check Result Popup (Urutan paling atas)
     if "exam_done" in st.query_params:
         tc = st.query_params.get("cat")
         lr = get_latest_student_result(user['name'], tc)
