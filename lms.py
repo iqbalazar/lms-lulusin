@@ -1,14 +1,16 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
-import sqlite3
 from datetime import datetime, timedelta
 import time
 import base64
 import io
 
+# GANTI IMPORT SQLITE BIASA DENGAN LIBSQL (TURSO)
+import libsql_experimental as sqlite3 
+
 # ==========================================
-# 1. KONFIGURASI HALAMAN
+# 1. KONFIGURASI HALAMAN & CSS
 # ==========================================
 st.set_page_config(
     page_title="Lulusin", 
@@ -17,193 +19,240 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM CSS (HANYA LAYOUT, WARNA DEFAULT STREAMLIT) ---
+# --- CUSTOM CSS (LAYOUT RAPI & DEFAULT COLOR FRIENDLY) ---
 st.markdown("""
 <style>
-    /* === HANYA MENATA LAYOUT, TIDAK MENGUBAH WARNA DASAR === */
-    
-    /* LOGIN & CONTAINER CARD STYLE */
-    /* Memberikan efek kartu (border & shadow) tanpa mengubah warna background default */
+    /* === 1. GLOBAL STYLE === */
+    html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
+
+    /* === 2. LOGIN & CARD CONTAINER === */
+    /* Membuat form login dan container terlihat seperti kartu dengan border halus */
     [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] > div {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-radius: 12px;
-        padding: 20px;
+        padding: 25px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
     }
 
-    /* KARTU SOAL */
+    /* === 3. KARTU SOAL (QUESTION CARD) === */
     .question-container {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-left: 5px solid #ff4b4b; /* Aksen merah default Streamlit */
         border-radius: 8px;
         padding: 20px;
         margin-bottom: 20px;
-        /* Background mengikuti tema Streamlit (transparan) */
     }
 
-    /* NAVIGASI SIDEBAR (Tetap butuh warna status) */
+    /* === 4. NAVIGASI SIDEBAR === */
     .nav-box {
         display: inline-block; width: 35px; height: 35px;
         line-height: 35px; text-align: center; margin: 3px;
-        border-radius: 5px; font-size: 14px; font-weight: bold;
-        color: white !important; /* Teks nomor selalu putih agar kontras */
+        border-radius: 6px; font-size: 14px; font-weight: bold;
+        color: white !important; /* Teks selalu putih agar kontras */
         text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
 
-    /* CARD GRID UJIAN */
+    /* === 5. GRID CARD UJIAN === */
     .exam-card-header {
         font-size: 1.2rem; font-weight: 700; margin-bottom: 5px;
     }
     .exam-card-info {
-        font-size: 0.9rem; opacity: 0.8; margin-bottom: 10px;
+        font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px;
     }
-    
-    /* TOMBOL IKON KECIL (Edit/Delete) - Agar tabel rapi */
+
+    /* === 6. TOMBOL IKON KECIL (EDIT/DELETE) === */
+    /* Menggunakan teknik CSS Selector 'has' untuk menargetkan tombol berisi emoji */
     button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
-        padding: 0px 8px !important;
-        border-radius: 4px !important;
+        padding: 0px 10px !important;
+        border-radius: 6px !important;
         min-height: 32px !important; height: 32px !important;
         border: 1px solid rgba(128,128,128,0.2) !important;
+        margin: 0px !important;
     }
-    
-    /* Tabs supaya lebih lega */
+    /* Hover effect khusus */
+    button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
+    button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
+
+    /* === 7. GENERAL TWEAKS === */
     .stTabs [data-baseweb="tab-list"] { gap: 15px; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     
-    /* Metric Value lebih besar */
-    [data-testid="stMetricValue"] {
-        font-size: 1.8rem !important;
+    /* Tombol Utama (Primary) */
+    .stButton > button[kind="primary"] {
+        font-weight: 600;
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE MANAGER
+# 2. DATABASE MANAGER (VERSI TURSO / LIBSQL)
 # ==========================================
 
 @st.cache_resource
 def get_db_connection():
-    conn = sqlite3.connect('sekolah_lms.db', check_same_thread=False)
-    conn.row_factory = sqlite3.Row 
-    return conn
+    # Ambil kredensial dari secrets.toml
+    try:
+        url = st.secrets["turso"]["db_url"]
+        token = st.secrets["turso"]["auth_token"]
+        conn = sqlite3.connect(url, auth_token=token)
+        return conn
+    except Exception as e:
+        st.error(f"Gagal koneksi ke Database Turso: {e}")
+        return None
+
+def run_query(query, params=()):
+    """Helper function untuk menjalankan query di Turso/LibSQL"""
+    conn = get_db_connection()
+    if not conn: return None
+    
+    c = conn.cursor()
+    try:
+        c.execute(query, params)
+        if query.strip().upper().startswith("SELECT"):
+            cols = [description[0] for description in c.description]
+            data = c.fetchall()
+            # Convert ke list of dict agar kompatibel dengan kode lama (row['key'])
+            result = [dict(zip(cols, row)) for row in data]
+            return result
+        else:
+            conn.commit()
+            return True
+    except Exception as e:
+        st.error(f"Query Error: {e}")
+        return []
 
 def init_db():
+    # Membuat tabel jika belum ada
+    queries = [
+        '''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT, name TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS materials (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, title TEXT, content TEXT, youtube_url TEXT, file_name TEXT, file_data BLOB, file_type TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, sub_category TEXT, question TEXT, q_image BLOB, opt_a TEXT, opt_a_img BLOB, opt_b TEXT, opt_b_img BLOB, opt_c TEXT, opt_c_img BLOB, opt_d TEXT, opt_d_img BLOB, opt_e TEXT, opt_e_img BLOB, answer TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS results (id INTEGER PRIMARY KEY AUTOINCREMENT, student_name TEXT, category TEXT, score REAL, total_questions INTEGER, date TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS exam_schedules (category TEXT PRIMARY KEY, open_time TEXT, close_time TEXT, duration_minutes INTEGER, max_attempts INTEGER)''',
+        '''CREATE TABLE IF NOT EXISTS student_exam_attempts (student_name TEXT, category TEXT, start_time TEXT, PRIMARY KEY (student_name, category))''',
+        '''CREATE TABLE IF NOT EXISTS student_answers_temp (student_name TEXT, category TEXT, question_id INTEGER, answer TEXT, is_doubtful INTEGER DEFAULT 0, PRIMARY KEY (student_name, category, question_id))''',
+        '''CREATE TABLE IF NOT EXISTS banners (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, content TEXT, image_data BLOB, created_at TEXT)'''
+    ]
+    
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT, name TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS materials (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, title TEXT, content TEXT, youtube_url TEXT, file_name TEXT, file_data BLOB, file_type TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, sub_category TEXT, question TEXT, q_image BLOB, opt_a TEXT, opt_a_img BLOB, opt_b TEXT, opt_b_img BLOB, opt_c TEXT, opt_c_img BLOB, opt_d TEXT, opt_d_img BLOB, opt_e TEXT, opt_e_img BLOB, answer TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS results (id INTEGER PRIMARY KEY AUTOINCREMENT, student_name TEXT, category TEXT, score REAL, total_questions INTEGER, date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS exam_schedules (category TEXT PRIMARY KEY, open_time TEXT, close_time TEXT, duration_minutes INTEGER, max_attempts INTEGER)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS student_exam_attempts (student_name TEXT, category TEXT, start_time TEXT, PRIMARY KEY (student_name, category))''')
-    c.execute('''CREATE TABLE IF NOT EXISTS student_answers_temp (student_name TEXT, category TEXT, question_id INTEGER, answer TEXT, is_doubtful INTEGER DEFAULT 0, PRIMARY KEY (student_name, category, question_id))''')
-    c.execute('''CREATE TABLE IF NOT EXISTS banners (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, content TEXT, image_data BLOB, created_at TEXT)''')
-
-    cols_exam = [row['name'] for row in c.execute("PRAGMA table_info(exams)")]
-    if 'sub_category' not in cols_exam: c.execute("ALTER TABLE exams ADD COLUMN sub_category TEXT")
-    cols_ans = [row['name'] for row in c.execute("PRAGMA table_info(student_answers_temp)")]
-    if 'is_doubtful' not in cols_ans: c.execute("ALTER TABLE student_answers_temp ADD COLUMN is_doubtful INTEGER DEFAULT 0")
-    cols_sch = [row['name'] for row in c.execute("PRAGMA table_info(exam_schedules)")]
-    if 'max_attempts' not in cols_sch: c.execute("ALTER TABLE exam_schedules ADD COLUMN max_attempts INTEGER DEFAULT 1")
-
-    c.execute("SELECT count(*) FROM users")
-    if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO users VALUES (?, ?, ?, ?)", ('admin', '123', 'admin', 'Administrator'))
-        c.execute("INSERT INTO users VALUES (?, ?, ?, ?)", ('siswa1', '123', 'student', 'Budi Santoso'))
+    if conn:
+        c = conn.cursor()
+        for q in queries:
+            c.execute(q)
         conn.commit()
 
+        # Cek User Default
+        res = run_query("SELECT count(*) as cnt FROM users")
+        if res and res[0]['cnt'] == 0:
+            run_query("INSERT INTO users VALUES (?, ?, ?, ?)", ('admin', '123', 'admin', 'Administrator'))
+            run_query("INSERT INTO users VALUES (?, ?, ?, ?)", ('siswa1', '123', 'student', 'Budi Santoso'))
+
+# Jalankan inisialisasi DB
 init_db()
 
-# --- HELPER DATABASE ---
-def get_user(username): return get_db_connection().cursor().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-def get_all_users(): return pd.read_sql("SELECT username, role, name FROM users", get_db_connection())
-def add_user(username, password, role, name):
-    try: get_db_connection().cursor().execute("INSERT INTO users VALUES (?, ?, ?, ?)", (username, password, role, name)); get_db_connection().commit(); return True
-    except: return False
-def update_user_data(username, name, role, new_password=None):
-    c = get_db_connection().cursor()
-    if new_password: c.execute("UPDATE users SET name=?, role=?, password=? WHERE username=?", (name, role, new_password, username))
-    else: c.execute("UPDATE users SET name=?, role=? WHERE username=?", (name, role, username))
-    get_db_connection().commit()
-def delete_user(username): get_db_connection().cursor().execute("DELETE FROM users WHERE username=?", (username,)); get_db_connection().commit()
-def update_user_password(username, new_password): get_db_connection().cursor().execute("UPDATE users SET password = ? WHERE username = ?", (new_password, username)); get_db_connection().commit()
-def get_materials(): return pd.read_sql("SELECT * FROM materials", get_db_connection())
-def get_material_by_id(mid): return get_db_connection().cursor().execute("SELECT * FROM materials WHERE id = ?", (mid,)).fetchone()
-def add_material(cat, title, content, yt, fname, fdata, ftype): get_db_connection().cursor().execute("INSERT INTO materials (category, title, content, youtube_url, file_name, file_data, file_type) VALUES (?,?,?,?,?,?,?)", (cat, title, content, yt, fname, fdata, ftype)); get_db_connection().commit()
-def update_material(mid, cat, title, content, yt, fname, fdata, ftype):
-    conn = get_db_connection(); c = conn.cursor()
-    if fdata: c.execute("UPDATE materials SET category=?, title=?, content=?, youtube_url=?, file_name=?, file_data=?, file_type=? WHERE id=?", (cat, title, content, yt, fname, fdata, ftype, mid))
-    else: c.execute("UPDATE materials SET category=?, title=?, content=?, youtube_url=? WHERE id=?", (cat, title, content, yt, mid))
-    conn.commit()
-def delete_material(mid): get_db_connection().cursor().execute("DELETE FROM materials WHERE id=?", (mid,)); get_db_connection().commit()
+# --- DATABASE HELPERS (CRUD MENGGUNAKAN RUN_QUERY) ---
+
+def get_user(u): 
+    res = run_query("SELECT * FROM users WHERE username = ?", (u,))
+    return res[0] if res else None
+
+def get_all_users(): return pd.DataFrame(run_query("SELECT username, role, name FROM users"))
+def add_user(u, p, r, n): run_query("INSERT INTO users VALUES (?, ?, ?, ?)", (u, p, r, n))
+def update_user_data(u, n, r, np=None):
+    if np: run_query("UPDATE users SET name=?, role=?, password=? WHERE username=?", (n, r, np, u))
+    else: run_query("UPDATE users SET name=?, role=? WHERE username=?", (n, r, u))
+def delete_user(u): run_query("DELETE FROM users WHERE username=?", (u,))
+def update_user_password(u, np): run_query("UPDATE users SET password = ? WHERE username = ?", (np, u))
+
+def get_materials(): return pd.DataFrame(run_query("SELECT * FROM materials"))
+def get_material_by_id(mid): 
+    res = run_query("SELECT * FROM materials WHERE id = ?", (mid,))
+    return res[0] if res else None
+def add_material(cat, tit, con, yt, fn, fd, ft): 
+    run_query("INSERT INTO materials (category, title, content, youtube_url, file_name, file_data, file_type) VALUES (?,?,?,?,?,?,?)", (cat, tit, con, yt, fn, fd, ft))
+def update_material(mid, cat, tit, con, yt, fn, fd, ft):
+    if fd: run_query("UPDATE materials SET category=?, title=?, content=?, youtube_url=?, file_name=?, file_data=?, file_type=? WHERE id=?", (cat, tit, con, yt, fn, fd, ft, mid))
+    else: run_query("UPDATE materials SET category=?, title=?, content=?, youtube_url=? WHERE id=?", (cat, tit, con, yt, mid))
+def delete_material(mid): run_query("DELETE FROM materials WHERE id=?", (mid,))
 
 def get_exams():
-    c = get_db_connection().cursor(); c.execute("SELECT * FROM exams"); rows = c.fetchall(); formatted_exams = []
+    rows = run_query("SELECT * FROM exams")
+    formatted = []
     for r in rows:
+        # Bersihkan opsi kosong/None
         raw_opsi = [r['opt_a'], r['opt_b'], r['opt_c'], r['opt_d'], r['opt_e']]
         raw_imgs = [r['opt_a_img'], r['opt_b_img'], r['opt_c_img'], r['opt_d_img'], r['opt_e_img']]
         valid_opsi, valid_imgs = [], []
         for i in range(len(raw_opsi)):
             if raw_opsi[i] and str(raw_opsi[i]).strip() != "":
                 valid_opsi.append(raw_opsi[i]); valid_imgs.append(raw_imgs[i])
-        formatted_exams.append({"id": r['id'], "category": r['category'], "sub_category": r['sub_category'] if 'sub_category' in r.keys() and r['sub_category'] else "Umum", "tanya": r['question'], "q_img": r['q_image'], "opsi": valid_opsi, "opsi_img": valid_imgs, "jawaban": r['answer']})
-    return formatted_exams
+        formatted.append({
+            "id": r['id'], "category": r['category'], 
+            "sub_category": r['sub_category'] if 'sub_category' in r and r['sub_category'] else "Umum", 
+            "tanya": r['question'], "q_img": r['q_image'], 
+            "opsi": valid_opsi, "opsi_img": valid_imgs, "jawaban": r['answer']
+        })
+    return formatted
 
-def get_exam_by_id(exam_id): return get_db_connection().cursor().execute("SELECT * FROM exams WHERE id = ?", (exam_id,)).fetchone()
+def get_exam_by_id(eid): 
+    res = run_query("SELECT * FROM exams WHERE id = ?", (eid,))
+    return res[0] if res else None
 
-def add_exam(cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans):
-    op_d = None if not op_d or str(op_d).strip() == "" else op_d
-    op_e = None if not op_e or str(op_e).strip() == "" else op_e
-    get_db_connection().cursor().execute('''INSERT INTO exams (category, sub_category, question, q_image, opt_a, opt_a_img, opt_b, opt_b_img, opt_c, opt_c_img, opt_d, opt_d_img, opt_e, opt_e_img, answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans)); get_db_connection().commit()
+def add_exam(cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans):
+    # Pastikan None jika string kosong untuk D dan E
+    od = None if not od or str(od).strip() == "" else od
+    oe = None if not oe or str(oe).strip() == "" else oe
+    run_query('''INSERT INTO exams (category, sub_category, question, q_image, opt_a, opt_a_img, opt_b, opt_b_img, opt_c, opt_c_img, opt_d, opt_d_img, opt_e, opt_e_img, answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+              (cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans))
 
-def update_exam_data(eid, cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans):
-    op_d = None if not op_d or str(op_d).strip() == "" else op_d
-    op_e = None if not op_e or str(op_e).strip() == "" else op_e
-    c = get_db_connection().cursor()
-    c.execute("""UPDATE exams SET category=?, sub_category=?, question=?, q_image=?, opt_a=?, opt_a_img=?, opt_b=?, opt_b_img=?, opt_c=?, opt_c_img=?, opt_d=?, opt_d_img=?, opt_e=?, opt_e_img=?, answer=? WHERE id=?""", 
-        (cat, sub_cat, q, q_img, op_a, img_a, op_b, img_b, op_c, img_c, op_d, img_d, op_e, img_e, ans, eid))
-    get_db_connection().commit()
+def update_exam_data(eid, cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans):
+    od = None if not od or str(od).strip() == "" else od
+    oe = None if not oe or str(oe).strip() == "" else oe
+    run_query("""UPDATE exams SET category=?, sub_category=?, question=?, q_image=?, opt_a=?, opt_a_img=?, opt_b=?, opt_b_img=?, opt_c=?, opt_c_img=?, opt_d=?, opt_d_img=?, opt_e=?, opt_e_img=?, answer=? WHERE id=?""", 
+              (cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans, eid))
 
-def delete_exam_data(eid): get_db_connection().cursor().execute("DELETE FROM exams WHERE id=?", (eid,)); get_db_connection().commit()
-def delete_all_exams_in_category(category): get_db_connection().cursor().execute("DELETE FROM exams WHERE category=?", (category,)); get_db_connection().commit()
-def set_schedule(category, open_str, close_str, duration, max_att): get_db_connection().cursor().execute("REPLACE INTO exam_schedules (category, open_time, close_time, duration_minutes, max_attempts) VALUES (?, ?, ?, ?, ?)", (category, open_str, close_str, duration, max_att)); get_db_connection().commit()
-def get_schedule(category): return get_db_connection().cursor().execute("SELECT * FROM exam_schedules WHERE category = ?", (category,)).fetchone()
+def delete_exam_data(eid): run_query("DELETE FROM exams WHERE id=?", (eid,))
+def delete_all_exams_in_category(cat): run_query("DELETE FROM exams WHERE category=?", (cat,))
 
-# -- LOGIKA UJIAN --
-def start_student_exam(student_name, category):
-    try: get_db_connection().cursor().execute("INSERT INTO student_exam_attempts (student_name, category, start_time) VALUES (?, ?, ?)", (student_name, category, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))); get_db_connection().commit()
-    except: pass
-def get_student_attempt(student_name, category): return get_db_connection().cursor().execute("SELECT start_time FROM student_exam_attempts WHERE student_name=? AND category=?", (student_name, category)).fetchone()
-def get_all_student_attempts(student_name): return get_db_connection().cursor().execute("SELECT category, start_time FROM student_exam_attempts WHERE student_name=?", (student_name,)).fetchall()
+def set_schedule(cat, op, cl, dur, mx): run_query("REPLACE INTO exam_schedules (category, open_time, close_time, duration_minutes, max_attempts) VALUES (?, ?, ?, ?, ?)", (cat, op, cl, dur, mx))
+def get_schedule(cat): 
+    res = run_query("SELECT * FROM exam_schedules WHERE category = ?", (cat,))
+    return res[0] if res else None
 
-def clear_student_attempt(student_name, category):
-    c = get_db_connection().cursor()
-    c.execute("DELETE FROM student_exam_attempts WHERE student_name=? AND category=?", (student_name, category))
-    c.execute("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (student_name, category))
-    get_db_connection().commit()
+def start_student_exam(name, cat): run_query("INSERT INTO student_exam_attempts (student_name, category, start_time) VALUES (?, ?, ?)", (name, cat, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+def get_student_attempt(name, cat): 
+    res = run_query("SELECT start_time FROM student_exam_attempts WHERE student_name=? AND category=?", (name, cat))
+    return res[0] if res else None
+def get_all_student_attempts(name): return run_query("SELECT category, start_time FROM student_exam_attempts WHERE student_name=?", (name,))
 
-def save_temp_answer(student_name, category, q_id, answer, is_doubtful):
-    doubt_val = 1 if is_doubtful else 0
-    get_db_connection().cursor().execute("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (student_name, category, q_id, answer, doubt_val))
-    get_db_connection().commit()
+def clear_student_attempt(name, cat):
+    run_query("DELETE FROM student_exam_attempts WHERE student_name=? AND category=?", (name, cat))
+    run_query("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
 
-def get_temp_answers_full(student_name, category): 
-    rows = get_db_connection().cursor().execute("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (student_name, category)).fetchall()
+def save_temp_answer(name, cat, qid, ans, doubt):
+    val = 1 if doubt else 0
+    run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, qid, ans, val))
+
+def get_temp_answers_full(name, cat):
+    rows = run_query("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
     result = {}
-    for row in rows: result[row['question_id']] = {'answer': row['answer'], 'doubt': bool(row['is_doubtful'])}
+    for r in rows: result[r['question_id']] = {'answer': r['answer'], 'doubt': bool(r['is_doubtful'])}
     return result
 
-def get_student_result_count(student_name, category): res = get_db_connection().cursor().execute("SELECT count(*) FROM results WHERE student_name=? AND category=?", (student_name, category)).fetchone(); return res[0] if res else 0
-def add_result(name, category, score, total, date): get_db_connection().cursor().execute("INSERT INTO results (student_name, category, score, total_questions, date) VALUES (?, ?, ?, ?, ?)", (name, category, score, total, date)); get_db_connection().commit()
-def get_results(): return pd.read_sql("SELECT * FROM results", get_db_connection())
-def get_latest_student_result(student_name, category): return get_db_connection().cursor().execute("SELECT * FROM results WHERE student_name=? AND category=? ORDER BY id DESC LIMIT 1", (student_name, category)).fetchone()
+def get_student_result_count(name, cat): 
+    res = run_query("SELECT count(*) as cnt FROM results WHERE student_name=? AND category=?", (name, cat))
+    return res[0]['cnt'] if res else 0
+def add_result(name, cat, sc, tot, dt): run_query("INSERT INTO results (student_name, category, score, total_questions, date) VALUES (?, ?, ?, ?, ?)", (name, cat, sc, tot, dt))
+def get_results(): return pd.DataFrame(run_query("SELECT * FROM results"))
+def get_latest_student_result(name, cat): 
+    res = run_query("SELECT * FROM results WHERE student_name=? AND category=? ORDER BY id DESC LIMIT 1", (name, cat))
+    return res[0] if res else None
 
-# -- BANNER MANAGER --
-def add_banner(b_type, content, image_data):
-    get_db_connection().cursor().execute("INSERT INTO banners (type, content, image_data, created_at) VALUES (?, ?, ?, ?)", (b_type, content, image_data, datetime.now().strftime("%Y-%m-%d")))
-    get_db_connection().commit()
-
-def get_banners(): return get_db_connection().cursor().execute("SELECT * FROM banners ORDER BY id DESC").fetchall()
-def delete_banner(b_id): get_db_connection().cursor().execute("DELETE FROM banners WHERE id=?", (b_id,)); get_db_connection().commit()
+def add_banner(typ, cont, img): run_query("INSERT INTO banners (type, content, image_data, created_at) VALUES (?, ?, ?, ?)", (typ, cont, img, datetime.now().strftime("%Y-%m-%d")))
+def get_banners(): return run_query("SELECT * FROM banners ORDER BY id DESC")
+def delete_banner(bid): run_query("DELETE FROM banners WHERE id=?", (bid,))
 
 # ==========================================
 # 3. AUTH & SESSION
@@ -257,9 +306,8 @@ def login_page():
 def logout_button():
     if st.sidebar.button("🚪 Keluar", type="primary"):
         st.session_state['current_user'] = None
-        st.session_state['edit_q_id'] = None
-        st.session_state['edit_material_id'] = None
-        st.session_state['selected_exam_cat'] = None
+        for key in ['edit_q_id', 'edit_material_id', 'selected_exam_cat']:
+            st.session_state[key] = None
         st.query_params.clear()
         st.rerun()
 
@@ -295,7 +343,7 @@ def show_result_popup(score, correct, total, category):
     st.balloons()
     st.markdown(f"""
     <div style='text-align: center; padding: 20px;'>
-        <h4 style='margin:0; opacity: 0.7;'>Hasil Ujian</h4>
+        <h4 style='margin:0; opacity:0.7;'>Hasil Ujian</h4>
         <h2 style='margin:0;'>{category}</h2>
         <h1 style='color: #27ae60; font-size: 72px; margin: 10px 0;'>{score:.1f}</h1>
         <div style='background:rgba(128,128,128,0.1); padding:10px; border-radius:8px;'>
@@ -363,6 +411,7 @@ def admin_dashboard():
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 Materi", "📝 Bank Soal", "📢 Info & Banner", "📊 Nilai", "👥 User"])
     
+    # TAB 1: MATERI
     with tab1:
         if st.session_state['edit_material_id']:
             mat_data = get_material_by_id(st.session_state['edit_material_id'])
@@ -408,18 +457,15 @@ def admin_dashboard():
                 for i, row in df_mat.iterrows():
                     with st.container():
                         c1, c2, c3, c4 = st.columns([2, 4, 1, 1])
-                        c1.write(row['category'])
-                        c2.write(row['title'])
-                        with c3:
-                            ca, cb = st.columns(2)
-                            if ca.button("✏️", key=f"edm_{row['id']}"): st.session_state['edit_material_id'] = row['id']; st.rerun()
-                            if cb.button("🗑️", key=f"delm_{row['id']}"): delete_material(row['id']); st.success("Deleted"); st.rerun()
-                        st.markdown("---")
+                        c1.write(row['category']); c2.write(row['title'])
+                        if c3.button("✏️", key=f"edm_{row['id']}"): st.session_state['edit_material_id'] = row['id']; st.rerun()
+                        if c4.button("🗑️", key=f"delm_{row['id']}"): delete_material(row['id']); st.success("Deleted"); st.rerun()
             else: st.info("Belum ada materi.")
 
+    # TAB 2: SOAL
     with tab2:
         if not st.session_state['admin_active_category']:
-            st.info("Pilih kategori ujian untuk mulai mengelola soal.")
+            st.info("Pilih kategori ujian.")
             cats = sorted(list(set([e['category'] for e in get_exams()])))
             c_sel1, c_sel2 = st.columns(2)
             with c_sel1: pc = st.selectbox("Pilih Kategori", ["--"]+cats)
@@ -447,7 +493,6 @@ def admin_dashboard():
                 with st.form("sch_form"):
                     c1, c2 = st.columns(2)
                     dr = c1.date_input("Rentang Tanggal", [d_s, d_e])
-                    c2.info("Pilih tanggal mulai dan selesai")
                     c3, c4 = st.columns(2)
                     top = c3.time_input("Jam Buka", t_op); tcl = c4.time_input("Jam Tutup", t_cl)
                     c5, c6 = st.columns(2)
@@ -493,12 +538,12 @@ def admin_dashboard():
                             add_exam(ac, sub, q, None, oa, None, ob, None, oc, None, od, None, oe, None, ans); st.success("OK"); st.rerun()
                 
                 with t_imp:
-                    st.info("Format Excel: Sub Kategori, Pertanyaan, Opsi A, Opsi B, Opsi C, Opsi D, Opsi E, Jawaban Benar")
+                    st.info("Format: Sub Kategori, Pertanyaan, Opsi A, Opsi B, Opsi C, Opsi D, Opsi E, Jawaban Benar")
                     s_data = [{"Sub Kategori": "Logika", "Pertanyaan": "...", "Opsi A": "A", "Opsi B": "B", "Opsi C": "C", "Opsi D": "", "Opsi E": "", "Jawaban Benar": "A"}]
                     df_t = pd.DataFrame(s_data)
                     buf = io.BytesIO(); 
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_t.to_excel(writer, index=False)
-                    st.download_button("⬇️ Download Template", data=buf.getvalue(), file_name="template.xlsx", mime="application/vnd.ms-excel")
+                    st.download_button("⬇️ Template Excel", data=buf.getvalue(), file_name="template.xlsx", mime="application/vnd.ms-excel")
                     
                     uf = st.file_uploader("Upload Excel", type=['xlsx'])
                     if uf and st.button("Proses Import"):
@@ -526,6 +571,7 @@ def admin_dashboard():
                         st.markdown("---")
             else: st.info("Kosong.")
 
+    # TAB 3: BANNER
     with tab3:
         col_b1, col_b2 = st.columns([1, 1])
         with col_b1:
@@ -558,6 +604,7 @@ def admin_dashboard():
                     if c2.button("🗑️", key=f"db_{b['id']}"): delete_banner(b['id']); st.rerun()
                     st.divider()
 
+    # TAB 4: NILAI
     with tab4:
         df = get_results()
         if not df.empty:
@@ -568,6 +615,7 @@ def admin_dashboard():
             st.dataframe(df, use_container_width=True)
         else: st.info("Belum ada data nilai.")
 
+    # TAB 5: USER
     with tab5:
         dfu = get_all_users()
         c1, c2, c3 = st.columns(3)
@@ -591,6 +639,7 @@ def admin_dashboard():
 def student_dashboard():
     user = st.session_state['current_user']
     
+    # Auto Check Time Logic
     attempts = get_all_student_attempts(user['name'])
     all_qs = get_exams()
     for att in attempts:
@@ -614,6 +663,7 @@ def student_dashboard():
 
     tab1, tab2, tab3 = st.tabs(["📚 Materi Pelajaran", "📝 Ujian & Kuis", "🏆 Rapor Nilai"])
 
+    # TAB MATERI
     with tab1:
         df = get_materials()
         if not df.empty:
@@ -627,6 +677,7 @@ def student_dashboard():
                         st.download_button(f"⬇️ Download {r['file_name']}", r['file_data'], file_name=r['file_name'])
         else: st.info("Belum ada materi tersedia.")
 
+    # TAB UJIAN (GRID)
     with tab2:
         cats = sorted(list(set([e['category'] for e in all_qs])))
         
@@ -735,6 +786,7 @@ def student_dashboard():
                 st.session_state['selected_exam_cat'] = None
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=pcat; st.query_params["u_id"]=user['username']; st.rerun()
 
+    # TAB NILAI
     with tab3:
         df = get_results()
         if not df.empty:
