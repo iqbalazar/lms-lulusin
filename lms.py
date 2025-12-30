@@ -140,8 +140,8 @@ init_db()
 
 # --- DATABASE HELPERS ---
 
-# [OPTIMISASI] Cache Data Berat (Soal & Materi)
-@st.cache_data(ttl=600) # Cache selama 10 menit atau sampai di-clear
+# [OPTIMISASI] Cache Data Berat
+@st.cache_data(ttl=600)
 def get_exams():
     rows = run_query("SELECT * FROM exams")
     formatted = []
@@ -177,30 +177,30 @@ def update_user_password(u, np): run_query("UPDATE users SET password = ? WHERE 
 def get_material_by_id(mid): res=run_query("SELECT * FROM materials WHERE id = ?", (mid,)); return res[0] if res else None
 def add_material(cat, tit, con, yt, fn, fd, ft): 
     run_query("INSERT INTO materials (category, title, content, youtube_url, file_name, file_data, file_type) VALUES (?,?,?,?,?,?,?)", (cat, tit, con, yt, fn, fd, ft))
-    clear_cache() # Clear cache
+    clear_cache()
 def update_material(mid, cat, tit, con, yt, fn, fd, ft):
     if fd: run_query("UPDATE materials SET category=?, title=?, content=?, youtube_url=?, file_name=?, file_data=?, file_type=? WHERE id=?", (cat, tit, con, yt, fn, fd, ft, mid))
     else: run_query("UPDATE materials SET category=?, title=?, content=?, youtube_url=? WHERE id=?", (cat, tit, con, yt, mid))
-    clear_cache() # Clear cache
+    clear_cache()
 def delete_material(mid): 
     run_query("DELETE FROM materials WHERE id=?", (mid,))
-    clear_cache() # Clear cache
+    clear_cache()
 
 def get_exam_by_id(eid): res=run_query("SELECT * FROM exams WHERE id = ?", (eid,)); return res[0] if res else None
 def add_exam(cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans):
     od=None if not od or str(od).strip()=="" else od; oe=None if not oe or str(oe).strip()=="" else oe
     run_query('''INSERT INTO exams (category, sub_category, question, q_image, opt_a, opt_a_img, opt_b, opt_b_img, opt_c, opt_c_img, opt_d, opt_d_img, opt_e, opt_e_img, answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans))
-    clear_cache() # Clear cache
+    clear_cache()
 def update_exam_data(eid, cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans):
     od=None if not od or str(od).strip()=="" else od; oe=None if not oe or str(oe).strip()=="" else oe
     run_query("""UPDATE exams SET category=?, sub_category=?, question=?, q_image=?, opt_a=?, opt_a_img=?, opt_b=?, opt_b_img=?, opt_c=?, opt_c_img=?, opt_d=?, opt_d_img=?, opt_e=?, opt_e_img=?, answer=? WHERE id=?""", (cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans, eid))
-    clear_cache() # Clear cache
+    clear_cache()
 def delete_exam_data(eid): 
     run_query("DELETE FROM exams WHERE id=?", (eid,))
-    clear_cache() # Clear cache
+    clear_cache()
 def delete_all_exams_in_category(cat): 
     run_query("DELETE FROM exams WHERE category=?", (cat,))
-    clear_cache() # Clear cache
+    clear_cache()
 
 def set_schedule(cat, op, cl, dur, mx): run_query("REPLACE INTO exam_schedules (category, open_time, close_time, duration_minutes, max_attempts) VALUES (?, ?, ?, ?, ?)", (cat, op, cl, dur, mx))
 def get_schedule(cat): res=run_query("SELECT * FROM exam_schedules WHERE category = ?", (cat,)); return res[0] if res else None
@@ -508,22 +508,24 @@ def admin_dashboard():
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
-    all_qs = get_exams() # Cache Loaded
-    atts = get_all_student_attempts(user['name'])
     
-    # Check Result Popup
+    # [FIX] CHECK RESULT DI AWAL
     if "exam_done" in st.query_params:
         tc = st.query_params.get("cat")
         lr = get_latest_student_result(user['name'], tc)
         if lr:
             show_result_popup(lr['score'], (lr['score']/100)*lr['total_questions'] if lr['total_questions']>0 else 0, lr['total_questions'], tc)
 
+    all_qs = get_exams() # Cached Data
+    atts = get_all_student_attempts(user['name'])
+    
     # Auto Check Time (Timezone WIB)
     for att in atts:
         cat = att['category']; sch = get_schedule(cat)
         if sch:
             s_dt = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S")
             dead = s_dt + timedelta(minutes=sch['duration_minutes'])
+            # Compare WIB Time
             if (dead - get_wib_now()).total_seconds() <= 0:
                 raw=[e for e in all_qs if e['category']==cat]; ans=get_temp_answers_full(user['name'],cat)
                 sc=sum([1 for s in raw if ans.get(s['id'],{}).get('answer')==s['jawaban']])
@@ -549,11 +551,12 @@ def student_dashboard():
                         st.download_button(f"⬇️ Download {r['file_name']}", r['file_data'], file_name=r['file_name'])
         else: st.info("Belum ada materi tersedia.")
 
-    # TAB UJIAN
+    # TAB UJIAN (GRID)
     with tab2:
         cats = sorted(list(set([e['category'] for e in all_qs])))
         
         if st.session_state['selected_exam_cat'] is None:
+            # GRID VIEW
             if not cats: st.info("Belum ada ujian tersedia.")
             else:
                 cols = st.columns(3)
@@ -575,6 +578,7 @@ def student_dashboard():
                             if st.button(f"Buka Soal", key=f"open_{cat}", use_container_width=True):
                                 st.session_state['selected_exam_cat'] = cat; st.query_params["cat"] = cat; st.rerun()
         else:
+            # QUESTION VIEW
             pcat = st.session_state['selected_exam_cat']
             
             c_back, c_title = st.columns([1, 5])
@@ -615,11 +619,13 @@ def student_dashboard():
 
             if show_exam:
                 raw = [e for e in all_qs if e['category']==pcat]
+                # Load existing answers from DB
                 saved_data = get_temp_answers_full(user['name'], pcat)
                 
+                # SIDEBAR NAV
                 with st.sidebar:
                     st.write("### 🧭 Navigasi Soal")
-                    st.caption("Klik tombol 'Simpan' untuk update navigasi")
+                    st.caption("Klik 'Simpan' untuk update status.")
                     grid_html = '<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px;">'
                     for i, q in enumerate(raw):
                         d = saved_data.get(q['id'], {})
@@ -629,6 +635,7 @@ def student_dashboard():
                     grid_html += '</div>'
                     st.markdown(grid_html, unsafe_allow_html=True)
 
+                # [FIX: FORM WRAPPER]
                 with st.form("exam_form"):
                     curr_sub = None
                     for idx, s in enumerate(raw):
@@ -644,19 +651,23 @@ def student_dashboard():
                                 with c: 
                                     if s['opsi_img'][i] and isinstance(s['opsi_img'][i], bytes): st.image(s['opsi_img'][i], width=100)
                         
+                        # Pre-select radio from saved data
                         cur_d = saved_data.get(s['id'], {})
                         prev_ans = cur_d.get('answer')
                         idx_sel = s['opsi'].index(prev_ans) if prev_ans in s['opsi'] else None
                         
                         c1, c2 = st.columns([4, 1])
                         with c1: 
+                            # [FIX: NO ON_CHANGE CALLBACK]
                             st.radio(f"Jawab {idx+1}", s['opsi'], key=f"q_{s['id']}", index=idx_sel, label_visibility="collapsed")
                         with c2: 
                             st.checkbox("Ragu", value=cur_d.get('doubt', False), key=f"chk_{s['id']}")
                     
                     st.divider()
                     c_sub1, c_sub2 = st.columns(2)
-                    if c_sub1.form_submit_button("💾 Simpan & Update Navigasi"):
+                    
+                    # [FIX: MANUAL SAVE BUTTON]
+                    if c_sub1.form_submit_button("💾 Simpan Jawaban"):
                         answers_to_save = {}
                         for q in raw:
                             ans = st.session_state.get(f"q_{q['id']}")
@@ -665,7 +676,7 @@ def student_dashboard():
                         save_batch_answers(user['name'], pcat, answers_to_save)
                         st.rerun()
                         
-                    if c_sub2.form_submit_button("✅ KIRIM JAWABAN FINAL", type="primary"):
+                    if c_sub2.form_submit_button("✅ KIRIM FINAL", type="primary"):
                         answers_to_save = {}
                         for q in raw:
                             ans = st.session_state.get(f"q_{q['id']}")
