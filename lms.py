@@ -61,7 +61,7 @@ st.markdown("""
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* 6. Small Icon Buttons */
+    /* 6. Icon Buttons */
     button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
         padding: 0px 8px !important;
         border-radius: 4px !important;
@@ -83,7 +83,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE MANAGER
+# 2. DATABASE MANAGER (TURSO)
 # ==========================================
 
 @st.cache_resource(ttl=3600)
@@ -385,7 +385,6 @@ def admin_dashboard():
                         n=st.radio("Jml Opsi",[3,4,5], horizontal=True)
                         st.caption("Isi teks opsi yang diperlukan. Gambar opsi diupload terpisah di bawah.")
                         
-                        # Kolom Text Opsi
                         c_ops1, c_ops2 = st.columns(2)
                         with c_ops1:
                             oa = st.text_input("Opsi A")
@@ -396,7 +395,6 @@ def admin_dashboard():
                             oe = st.text_input("Opsi E")
                             ans = st.text_input("Kunci (A/B/C/D/E)")
                         
-                        # Expander Upload Gambar Opsi
                         with st.expander("Upload Gambar untuk Opsi (Opsional)"):
                             c_img1, c_img2, c_img3, c_img4, c_img5 = st.columns(5)
                             ia = c_img1.file_uploader("Img A", key="img_a")
@@ -450,7 +448,7 @@ def admin_dashboard():
                 c1,c2=st.columns([4,1]); c1.write(f"ID: {b['id']}"); 
                 if c2.button("Hapus", key=f"db_{b['id']}"): delete_banner(b['id']); st.rerun()
 
-    # [FIX] Perbaikan logika one-liner untuk menghindari AttributeError
+    # [FIX] Mencegah Error AttributeError dengan memecah if-else
     with tab4:
         df = get_results()
         if not df.empty:
@@ -526,7 +524,7 @@ def student_dashboard():
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=cat; st.query_params["u_id"]=user['username']; st.rerun()
 
     st.markdown(f"### 👋 Halo, {user['name']}"); display_banner_carousel(); st.write("")
-    tab1, tab2, tab3 = st.tabs(["📚 Materi Pelajaran", "📝 Ujian & Kuis", "🏆 Rapor Nilai"])
+    tab1, tab2, tab3 = st.tabs(["📚 Materi", "📝 Ujian", "🏆 Nilai"])
 
     # TAB MATERI
     with tab1:
