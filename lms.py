@@ -27,9 +27,10 @@ def get_wib_now():
 # --- CUSTOM CSS ---
 st.markdown("""
 <style>
+    /* 1. Global */
     html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
 
-    /* Card Containers */
+    /* 2. Card Containers */
     [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] > div {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-radius: 12px;
@@ -37,7 +38,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
     }
 
-    /* Question Card */
+    /* 3. Question Card */
     .question-container {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-left: 5px solid #ff4b4b;
@@ -46,7 +47,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
 
-    /* Sidebar Nav */
+    /* 4. Sidebar Nav */
     .nav-box {
         display: inline-block; width: 35px; height: 35px;
         line-height: 35px; text-align: center; margin: 3px;
@@ -56,11 +57,11 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
 
-    /* Grid Exam */
+    /* 5. Grid Exam */
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* Icon Buttons */
+    /* 6. Small Icon Buttons */
     button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
         padding: 0px 8px !important;
         border-radius: 4px !important;
@@ -71,6 +72,7 @@ st.markdown("""
     button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
     button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
 
+    /* 7. General */
     .stTabs [data-baseweb="tab-list"] { gap: 15px; }
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     .stButton > button[kind="primary"] { font-weight: 600; border-radius: 8px; }
@@ -81,7 +83,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE MANAGER (TURSO)
+# 2. DATABASE MANAGER
 # ==========================================
 
 @st.cache_resource(ttl=3600)
@@ -448,7 +450,13 @@ def admin_dashboard():
                 c1,c2=st.columns([4,1]); c1.write(f"ID: {b['id']}"); 
                 if c2.button("Hapus", key=f"db_{b['id']}"): delete_banner(b['id']); st.rerun()
 
-    with tab4: df=get_results(); st.dataframe(df, use_container_width=True) if not df.empty else st.info("Kosong")
+    # [FIX] Perbaikan logika one-liner untuk menghindari AttributeError
+    with tab4:
+        df = get_results()
+        if not df.empty:
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("Kosong")
 
     # --- TAB 5: KELOLA USER (LAYOUT ROW-BY-ROW) ---
     with tab5:
@@ -508,6 +516,7 @@ def student_dashboard():
         if sch:
             s_dt = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S")
             dead = s_dt + timedelta(minutes=sch['duration_minutes'])
+            # Compare WIB Time
             if (dead - get_wib_now()).total_seconds() <= 0:
                 raw=[e for e in all_qs if e['category']==cat]; ans=get_temp_answers_full(user['name'],cat)
                 sc=sum([1 for s in raw if ans.get(s['id'],{}).get('answer')==s['jawaban']])
@@ -516,10 +525,7 @@ def student_dashboard():
                 clear_student_attempt(user['name'],cat)
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=cat; st.query_params["u_id"]=user['username']; st.rerun()
 
-    st.markdown(f"### 👋 Selamat Datang, **{user['name']}**")
-    display_banner_carousel()
-    st.write("")
-
+    st.markdown(f"### 👋 Halo, {user['name']}"); display_banner_carousel(); st.write("")
     tab1, tab2, tab3 = st.tabs(["📚 Materi Pelajaran", "📝 Ujian & Kuis", "🏆 Rapor Nilai"])
 
     # TAB MATERI
