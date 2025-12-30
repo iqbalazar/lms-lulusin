@@ -27,10 +27,9 @@ def get_wib_now():
 # --- CUSTOM CSS ---
 st.markdown("""
 <style>
-    /* 1. Global */
     html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
 
-    /* 2. Card Containers */
+    /* Card Containers */
     [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] > div {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-radius: 12px;
@@ -38,7 +37,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
     }
 
-    /* 3. Question Card */
+    /* Question Card */
     .question-container {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-left: 5px solid #ff4b4b;
@@ -47,7 +46,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
 
-    /* 4. Sidebar Nav */
+    /* Sidebar Nav */
     .nav-box {
         display: inline-block; width: 35px; height: 35px;
         line-height: 35px; text-align: center; margin: 3px;
@@ -57,23 +56,27 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
 
-    /* 5. Grid Exam */
+    /* Grid Exam */
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* 6. Icon Buttons */
+    /* Icon Buttons */
     button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
-        padding: 0px 8px !important; border-radius: 4px !important;
+        padding: 0px 8px !important;
+        border-radius: 4px !important;
         min-height: 32px !important; height: 32px !important;
-        border: 1px solid rgba(128,128,128,0.2) !important; margin: 0px !important;
+        border: 1px solid rgba(128,128,128,0.2) !important;
+        margin: 0px !important;
     }
     button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
     button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
 
-    /* 7. General */
     .stTabs [data-baseweb="tab-list"] { gap: 15px; }
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     .stButton > button[kind="primary"] { font-weight: 600; border-radius: 8px; }
+    
+    :root { --btn-edit-bg: #FFC107; --btn-delete-bg: #E53935; }
+    @media (prefers-color-scheme: dark) { :root { --btn-edit-bg: #FFD54F; --btn-delete-bg: #EF5350; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -134,7 +137,9 @@ def init_db():
 init_db()
 
 # --- DATABASE HELPERS ---
-def get_user(u): res=run_query("SELECT * FROM users WHERE username = ?", (u,)); return res[0] if res else None
+def get_user(u): 
+    res = run_query("SELECT * FROM users WHERE username = ?", (u,))
+    return res[0] if res else None
 def get_all_users(): return pd.DataFrame(run_query("SELECT username, role, name FROM users"))
 def add_user(u, p, r, n): run_query("INSERT INTO users VALUES (?, ?, ?, ?)", (u, p, r, n)); return True
 def update_user_data(u, n, r, np=None):
@@ -188,7 +193,9 @@ def save_temp_answer(name, cat, qid, ans, doubt):
     run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, qid, ans, 1 if doubt else 0))
 def get_temp_answers_full(name, cat):
     rows = run_query("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
-    return {r['question_id']: {'answer': r['answer'], 'doubt': bool(r['is_doubtful'])} for r in rows}
+    result = {}
+    for r in rows: result[r['question_id']] = {'answer': r['answer'], 'doubt': bool(r['is_doubtful'])}
+    return result
 def get_student_result_count(name, cat): res=run_query("SELECT count(*) as cnt FROM results WHERE student_name=? AND category=?", (name, cat)); return res[0]['cnt'] if res else 0
 def add_result(name, cat, sc, tot, dt): run_query("INSERT INTO results (student_name, category, score, total_questions, date) VALUES (?, ?, ?, ?, ?)", (name, cat, sc, tot, dt))
 def get_results(): return pd.DataFrame(run_query("SELECT * FROM results"))
@@ -240,8 +247,6 @@ def logout_button():
 # ==========================================
 # 4. KOMPONEN UI
 # ==========================================
-
-# [PERBAIKAN] Timer dipindahkan ke Sidebar, CSS disesuaikan
 def display_timer_js(seconds_left):
     html_code = f"""
     <div style="width:100%; background:#ff4b4b; color:white; text-align:center; padding:10px; border-radius:8px; font-size:18px; font-weight:bold; margin-bottom:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
@@ -423,9 +428,10 @@ def admin_dashboard():
             if exams:
                 for ex in exams:
                     with st.container():
-                        c1,c2,c3=st.columns([6,1,1]); c1.markdown(f"**[{ex['sub_category']}]** {ex['tanya'][:80]}...")
-                        if c2.button("✏️", key=f"eq_{ex['id']}"): st.session_state['edit_q_id']=ex['id']; st.rerun()
-                        if c3.button("🗑️", key=f"dq_{ex['id']}"): delete_exam_data(ex['id']); st.rerun()
+                        c_row1, c_row2, c_row3 = st.columns([6, 1, 1])
+                        c_row1.markdown(f"**[{ex['sub_category']}]** {ex['tanya'][:80]}...")
+                        if c_row2.button("✏️", key=f"eq_{ex['id']}"): st.session_state['edit_q_id']=ex['id']; st.rerun()
+                        if c_row3.button("🗑️", key=f"dq_{ex['id']}"): delete_exam_data(ex['id']); st.rerun()
                         st.markdown("---")
             else: st.info("Kosong")
 
@@ -485,31 +491,36 @@ def admin_dashboard():
 def student_dashboard():
     user = st.session_state['current_user']
     
-    # [PERBAIKAN] Pop-up dipindahkan ke sini agar dieksekusi setelah rerun
+    # [FIX: DEFINISI DATA DI AWAL]
+    all_qs = get_exams() # Penting agar tidak NameError
+    atts = get_all_student_attempts(user['name'])
+    
+    # Check Result Popup
     if "exam_done" in st.query_params:
         tc = st.query_params.get("cat")
         lr = get_latest_student_result(user['name'], tc)
         if lr:
             show_result_popup(lr['score'], (lr['score']/100)*lr['total_questions'] if lr['total_questions']>0 else 0, lr['total_questions'], tc)
 
-    # Auto Check Time Logic (Timezone WIB)
-    atts = get_all_student_attempts(user['name']); allq = get_exams()
+    # Auto Check Time (Timezone WIB)
     for att in atts:
         cat = att['category']; sch = get_schedule(cat)
         if sch:
             s_dt = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S")
             dead = s_dt + timedelta(minutes=sch['duration_minutes'])
-            # Compare WIB Time
             if (dead - get_wib_now()).total_seconds() <= 0:
-                raw=[e for e in allq if e['category']==cat]; ans=get_temp_answers_full(user['name'],cat)
+                raw=[e for e in all_qs if e['category']==cat]; ans=get_temp_answers_full(user['name'],cat)
                 sc=sum([1 for s in raw if ans.get(s['id'],{}).get('answer')==s['jawaban']])
                 val=(sc/len(raw))*100 if raw else 0
                 add_result(user['name'],cat,val,len(raw),get_wib_now().strftime("%Y-%m-%d %H:%M:%S"))
                 clear_student_attempt(user['name'],cat)
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=cat; st.query_params["u_id"]=user['username']; st.rerun()
 
-    st.markdown(f"### 👋 Halo, {user['name']}"); display_banner_carousel(); st.write("")
-    tab1, tab2, tab3 = st.tabs(["📚 Materi", "📝 Ujian", "🏆 Nilai"])
+    st.markdown(f"### 👋 Selamat Datang, **{user['name']}**")
+    display_banner_carousel()
+    st.write("")
+
+    tab1, tab2, tab3 = st.tabs(["📚 Materi Pelajaran", "📝 Ujian & Kuis", "🏆 Rapor Nilai"])
 
     # TAB MATERI
     with tab1:
@@ -577,7 +588,6 @@ def student_dashboard():
                     dead = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S") + timedelta(minutes=dur)
                     if (dead - now_wib).total_seconds() <= 0: trigger_submit = True
                     else:
-                        # [PERBAIKAN] Timer dipindah ke Sidebar
                         with st.sidebar:
                             display_timer_js((dead - now_wib).total_seconds())
                         show_exam = True
