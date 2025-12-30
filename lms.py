@@ -1,13 +1,11 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import libsql_experimental as sqlite3 
 from datetime import datetime, timedelta
 import time
 import base64
 import io
-
-# GANTI IMPORT SQLITE BIASA DENGAN LIBSQL (TURSO)
-import libsql_experimental as sqlite3 
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN & CSS
@@ -19,112 +17,113 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM CSS (LAYOUT RAPI & DEFAULT COLOR FRIENDLY) ---
+# --- CUSTOM CSS ROBUST ---
 st.markdown("""
 <style>
-    /* === 1. GLOBAL STYLE === */
-    html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
+    /* === 1. VARIABLES === */
+    :root {
+        --text-color: #31333F;
+        --bg-card: #ffffff;
+        --border-color: #2980b9;
+        --shadow-color: rgba(0,0,0,0.1);
+        --tab-bg: #f0f2f6;
+        --tab-text: #31333F;
+        --btn-edit-bg: #FFC107; 
+        --btn-edit-txt: #212121;
+        --btn-delete-bg: #E53935;
+        --btn-delete-txt: #FFFFFF;
+    }
 
-    /* === 2. LOGIN & CARD CONTAINER === */
-    /* Membuat form login dan container terlihat seperti kartu dengan border halus */
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --text-color: #fafafa;
+            --bg-card: #262730;
+            --border-color: #5dade2;
+            --shadow-color: rgba(255,255,255,0.05);
+            --tab-bg: #0e1117;
+            --tab-text: #fafafa;
+            --btn-edit-bg: #FFD54F; 
+            --btn-delete-bg: #EF5350;
+        }
+    }
+
+    /* === 2. GLOBAL & LAYOUT === */
+    html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
+    
     [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] > div {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-radius: 12px;
-        padding: 25px;
+        padding: 20px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
     }
 
-    /* === 3. KARTU SOAL (QUESTION CARD) === */
     .question-container {
         border: 1px solid rgba(128, 128, 128, 0.2);
-        border-left: 5px solid #ff4b4b; /* Aksen merah default Streamlit */
+        border-left: 5px solid #ff4b4b;
         border-radius: 8px;
         padding: 20px;
         margin-bottom: 20px;
     }
 
-    /* === 4. NAVIGASI SIDEBAR === */
     .nav-box {
         display: inline-block; width: 35px; height: 35px;
         line-height: 35px; text-align: center; margin: 3px;
-        border-radius: 6px; font-size: 14px; font-weight: bold;
-        color: white !important; /* Teks selalu putih agar kontras */
+        border-radius: 5px; font-size: 14px; font-weight: bold;
+        color: white !important;
         text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
 
-    /* === 5. GRID CARD UJIAN === */
-    .exam-card-header {
-        font-size: 1.2rem; font-weight: 700; margin-bottom: 5px;
-    }
-    .exam-card-info {
-        font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px;
-    }
-
-    /* === 6. TOMBOL IKON KECIL (EDIT/DELETE) === */
-    /* Menggunakan teknik CSS Selector 'has' untuk menargetkan tombol berisi emoji */
+    .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
+    .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 10px; }
+    
+    /* TOMBOL IKON KECIL (Edit/Delete) */
     button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
-        padding: 0px 10px !important;
-        border-radius: 6px !important;
+        padding: 0px 8px !important;
+        border-radius: 4px !important;
         min-height: 32px !important; height: 32px !important;
         border: 1px solid rgba(128,128,128,0.2) !important;
         margin: 0px !important;
     }
-    /* Hover effect khusus */
-    button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
-    button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
-
-    /* === 7. GENERAL TWEAKS === */
+    
     .stTabs [data-baseweb="tab-list"] { gap: 15px; }
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
-    
-    /* Tombol Utama (Primary) */
-    .stButton > button[kind="primary"] {
-        font-weight: 600;
-        border-radius: 8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE MANAGER (VERSI TURSO / LIBSQL)
+# 2. DATABASE MANAGER (TURSO / LIBSQL)
 # ==========================================
 
 @st.cache_resource
 def get_db_connection():
-    # Ambil kredensial dari secrets.toml
     try:
         url = st.secrets["turso"]["db_url"]
         token = st.secrets["turso"]["auth_token"]
         conn = sqlite3.connect(url, auth_token=token)
         return conn
     except Exception as e:
-        st.error(f"Gagal koneksi ke Database Turso: {e}")
+        st.error(f"Koneksi Database Gagal: {e}")
         return None
 
 def run_query(query, params=()):
-    """Helper function untuk menjalankan query di Turso/LibSQL"""
     conn = get_db_connection()
     if not conn: return None
-    
     c = conn.cursor()
     try:
         c.execute(query, params)
         if query.strip().upper().startswith("SELECT"):
             cols = [description[0] for description in c.description]
             data = c.fetchall()
-            # Convert ke list of dict agar kompatibel dengan kode lama (row['key'])
             result = [dict(zip(cols, row)) for row in data]
             return result
         else:
             conn.commit()
             return True
     except Exception as e:
-        st.error(f"Query Error: {e}")
+        st.error(f"Error Query: {e}")
         return []
 
 def init_db():
-    # Membuat tabel jika belum ada
     queries = [
         '''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT, name TEXT)''',
         '''CREATE TABLE IF NOT EXISTS materials (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, title TEXT, content TEXT, youtube_url TEXT, file_name TEXT, file_data BLOB, file_type TEXT)''',
@@ -135,29 +134,22 @@ def init_db():
         '''CREATE TABLE IF NOT EXISTS student_answers_temp (student_name TEXT, category TEXT, question_id INTEGER, answer TEXT, is_doubtful INTEGER DEFAULT 0, PRIMARY KEY (student_name, category, question_id))''',
         '''CREATE TABLE IF NOT EXISTS banners (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, content TEXT, image_data BLOB, created_at TEXT)'''
     ]
-    
     conn = get_db_connection()
     if conn:
         c = conn.cursor()
-        for q in queries:
-            c.execute(q)
+        for q in queries: c.execute(q)
         conn.commit()
-
-        # Cek User Default
         res = run_query("SELECT count(*) as cnt FROM users")
         if res and res[0]['cnt'] == 0:
             run_query("INSERT INTO users VALUES (?, ?, ?, ?)", ('admin', '123', 'admin', 'Administrator'))
             run_query("INSERT INTO users VALUES (?, ?, ?, ?)", ('siswa1', '123', 'student', 'Budi Santoso'))
 
-# Jalankan inisialisasi DB
 init_db()
 
-# --- DATABASE HELPERS (CRUD MENGGUNAKAN RUN_QUERY) ---
-
+# --- DATABASE HELPERS ---
 def get_user(u): 
     res = run_query("SELECT * FROM users WHERE username = ?", (u,))
     return res[0] if res else None
-
 def get_all_users(): return pd.DataFrame(run_query("SELECT username, role, name FROM users"))
 def add_user(u, p, r, n): run_query("INSERT INTO users VALUES (?, ?, ?, ?)", (u, p, r, n))
 def update_user_data(u, n, r, np=None):
@@ -181,7 +173,6 @@ def get_exams():
     rows = run_query("SELECT * FROM exams")
     formatted = []
     for r in rows:
-        # Bersihkan opsi kosong/None
         raw_opsi = [r['opt_a'], r['opt_b'], r['opt_c'], r['opt_d'], r['opt_e']]
         raw_imgs = [r['opt_a_img'], r['opt_b_img'], r['opt_c_img'], r['opt_d_img'], r['opt_e_img']]
         valid_opsi, valid_imgs = [], []
@@ -201,7 +192,6 @@ def get_exam_by_id(eid):
     return res[0] if res else None
 
 def add_exam(cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, oe, oei, ans):
-    # Pastikan None jika string kosong untuk D dan E
     od = None if not od or str(od).strip() == "" else od
     oe = None if not oe or str(oe).strip() == "" else oe
     run_query('''INSERT INTO exams (category, sub_category, question, q_image, opt_a, opt_a_img, opt_b, opt_b_img, opt_c, opt_c_img, opt_d, opt_d_img, opt_e, opt_e_img, answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
@@ -215,7 +205,6 @@ def update_exam_data(eid, cat, sub, q, qi, oa, oai, ob, obi, oc, oci, od, odi, o
 
 def delete_exam_data(eid): run_query("DELETE FROM exams WHERE id=?", (eid,))
 def delete_all_exams_in_category(cat): run_query("DELETE FROM exams WHERE category=?", (cat,))
-
 def set_schedule(cat, op, cl, dur, mx): run_query("REPLACE INTO exam_schedules (category, open_time, close_time, duration_minutes, max_attempts) VALUES (?, ?, ?, ?, ?)", (cat, op, cl, dur, mx))
 def get_schedule(cat): 
     res = run_query("SELECT * FROM exam_schedules WHERE category = ?", (cat,))
@@ -226,21 +215,17 @@ def get_student_attempt(name, cat):
     res = run_query("SELECT start_time FROM student_exam_attempts WHERE student_name=? AND category=?", (name, cat))
     return res[0] if res else None
 def get_all_student_attempts(name): return run_query("SELECT category, start_time FROM student_exam_attempts WHERE student_name=?", (name,))
-
 def clear_student_attempt(name, cat):
     run_query("DELETE FROM student_exam_attempts WHERE student_name=? AND category=?", (name, cat))
     run_query("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
-
 def save_temp_answer(name, cat, qid, ans, doubt):
     val = 1 if doubt else 0
     run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, qid, ans, val))
-
 def get_temp_answers_full(name, cat):
     rows = run_query("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
     result = {}
     for r in rows: result[r['question_id']] = {'answer': r['answer'], 'doubt': bool(r['is_doubtful'])}
     return result
-
 def get_student_result_count(name, cat): 
     res = run_query("SELECT count(*) as cnt FROM results WHERE student_name=? AND category=?", (name, cat))
     return res[0]['cnt'] if res else 0
@@ -249,7 +234,6 @@ def get_results(): return pd.DataFrame(run_query("SELECT * FROM results"))
 def get_latest_student_result(name, cat): 
     res = run_query("SELECT * FROM results WHERE student_name=? AND category=? ORDER BY id DESC LIMIT 1", (name, cat))
     return res[0] if res else None
-
 def add_banner(typ, cont, img): run_query("INSERT INTO banners (type, content, image_data, created_at) VALUES (?, ?, ?, ?)", (typ, cont, img, datetime.now().strftime("%Y-%m-%d")))
 def get_banners(): return run_query("SELECT * FROM banners ORDER BY id DESC")
 def delete_banner(bid): run_query("DELETE FROM banners WHERE id=?", (bid,))
@@ -268,8 +252,7 @@ def check_session_persistence():
     if st.session_state['current_user'] is None and "u_id" in st.query_params:
         user_data = get_user(st.query_params["u_id"])
         if user_data: st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
-    if "cat" in st.query_params:
-        st.session_state['selected_exam_cat'] = st.query_params["cat"]
+    if "cat" in st.query_params: st.session_state['selected_exam_cat'] = st.query_params["cat"]
 
 def input_callback(q_id, category):
     user_name = st.session_state['current_user']['name']
@@ -278,19 +261,11 @@ def input_callback(q_id, category):
     save_temp_answer(user_name, category, q_id, selected_val, is_doubt)
 
 def login_page():
-    st.write("")
-    st.write("")
-    st.write("")
+    st.write(""); st.write(""); st.write("")
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
         with st.form("login_form", clear_on_submit=False):
-            st.markdown("""
-            <div style="text-align: center; margin-bottom: 20px;">
-                <div style="font-size: 50px;">🎓</div>
-                <h2 style="margin: 0; padding:0;">Lulusin</h2>
-                <p style="opacity: 0.7; font-size: 14px; margin-top: 5px;">Silakan masuk untuk melanjutkan</p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("""<div style="text-align: center; margin-bottom: 20px;"><div style="font-size: 50px;">🎓</div><h2 style="margin: 0; padding:0;">Lulusin</h2><p style="opacity: 0.7; font-size: 14px; margin-top: 5px;">Silakan masuk untuk melanjutkan</p></div>""", unsafe_allow_html=True)
             user = st.text_input("Username", placeholder="Masukkan username")
             pwd = st.text_input("Password", type="password", placeholder="Masukkan password")
             st.write("")
@@ -299,22 +274,18 @@ def login_page():
                 data = get_user(user)
                 if data and data['password'] == pwd:
                     st.session_state['current_user'] = {"username": data['username'], "role": data['role'], "name": data['name']}
-                    st.query_params["u_id"] = user
-                    st.rerun()
+                    st.query_params["u_id"] = user; st.rerun()
                 else: st.error("Username atau Password salah")
 
 def logout_button():
     if st.sidebar.button("🚪 Keluar", type="primary"):
         st.session_state['current_user'] = None
-        for key in ['edit_q_id', 'edit_material_id', 'selected_exam_cat']:
-            st.session_state[key] = None
-        st.query_params.clear()
-        st.rerun()
+        for k in ['edit_q_id', 'edit_material_id', 'selected_exam_cat', 'admin_active_category']: st.session_state[k] = None
+        st.query_params.clear(); st.rerun()
 
 # ==========================================
 # 4. KOMPONEN UI
 # ==========================================
-
 def display_timer_js(end_time_str):
     html_code = f"""
     <div style="position:fixed; top:0; left:0; width:100%; background:#ff4b4b; color:white; text-align:center; padding:12px; font-size:20px; font-weight:bold; z-index:99999; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
@@ -328,11 +299,7 @@ def display_timer_js(end_time_str):
             var m = Math.floor((dist % (1000 * 60 * 60)) / (1000 * 60));
             var s = Math.floor((dist % (1000 * 60)) / 1000);
             document.getElementById("timer").innerHTML = m + "m " + s + "s ";
-            if (dist < 0) {{
-                clearInterval(x);
-                document.getElementById("timer").innerHTML = "WAKTU HABIS!";
-                window.parent.location.reload(); 
-            }}
+            if (dist < 0) {{ clearInterval(x); document.getElementById("timer").innerHTML = "WAKTU HABIS!"; window.parent.location.reload(); }}
         }}, 1000);
     </script>
     """
@@ -341,56 +308,36 @@ def display_timer_js(end_time_str):
 @st.dialog("🎉 Hasil Ujian", width="small")
 def show_result_popup(score, correct, total, category):
     st.balloons()
-    st.markdown(f"""
-    <div style='text-align: center; padding: 20px;'>
-        <h4 style='margin:0; opacity:0.7;'>Hasil Ujian</h4>
-        <h2 style='margin:0;'>{category}</h2>
-        <h1 style='color: #27ae60; font-size: 72px; margin: 10px 0;'>{score:.1f}</h1>
-        <div style='background:rgba(128,128,128,0.1); padding:10px; border-radius:8px;'>
-            ✅ Benar: <b>{int(correct)}</b> / {total} Soal
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div style='text-align: center; padding: 20px;'><h4 style='margin:0; opacity:0.7;'>Hasil Ujian</h4><h2 style='margin:0;'>{category}</h2><h1 style='color: #27ae60; font-size: 72px; margin: 10px 0;'>{score:.1f}</h1><div style='background:rgba(128,128,128,0.1); padding:10px; border-radius:8px;'>✅ Benar: <b>{int(correct)}</b> / {total} Soal</div></div>""", unsafe_allow_html=True)
     if st.button("Tutup & Kembali ke Menu", use_container_width=True, type="primary"):
         if "exam_done" in st.query_params: del st.query_params["exam_done"]
         if "cat" in st.query_params: del st.query_params["cat"]
-        st.session_state['selected_exam_cat'] = None
-        st.rerun()
+        st.session_state['selected_exam_cat'] = None; st.rerun()
 
 def display_banner_carousel():
     banners = get_banners()
     if not banners: return
-
     slides_html = ""
     for idx, b in enumerate(banners):
         b_type = b['type']; content = b['content']; img_blob = b['image_data']
-        display_style = "block" if idx == 0 else "none"
+        display = "block" if idx == 0 else "none"
         if b_type == 'image' and img_blob:
             b64_img = base64.b64encode(img_blob).decode()
-            slides_html += f"""<div class="mySlides fade" style="display:{display_style};"><img src="data:image/png;base64,{b64_img}" style="width:100%;height:300px;object-fit:cover;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);"></div>"""
-        else:
-            slides_html += f"""<div class="mySlides fade" style="display:{display_style};">{content}</div>"""
-
-    carousel_code = f"""
-    <style>
-    .slideshow-container {{ max-width: 100%; position: relative; margin: auto; }}
-    .fade {{ animation-name: fade; animation-duration: 1.5s; }}
-    @keyframes fade {{ from {{opacity: .4}} to {{opacity: 1}} }}
-    </style>
+            slides_html += f"""<div class="mySlides fade" style="display:{display};"><img src="data:image/png;base64,{b64_img}" style="width:100%;height:300px;object-fit:cover;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);"></div>"""
+        else: slides_html += f"""<div class="mySlides fade" style="display:{display};">{content}</div>"""
+    components.html(f"""
+    <style>.slideshow-container {{ max-width: 100%; position: relative; margin: auto; }} .fade {{ animation-name: fade; animation-duration: 1.5s; }} @keyframes fade {{ from {{opacity: .4}} to {{opacity: 1}} }}</style>
     <div class="slideshow-container"> {slides_html} </div>
     <script>
     let slideIndex = 0; showSlides();
     function showSlides() {{
       let i; let slides = document.getElementsByClassName("mySlides");
       for (i = 0; i < slides.length; i++) {{ slides[i].style.display = "none"; }}
-      slideIndex++;
-      if (slideIndex > slides.length) {{slideIndex = 1}}    
-      slides[slideIndex-1].style.display = "block";  
-      setTimeout(showSlides, 5000); 
+      slideIndex++; if (slideIndex > slides.length) {{slideIndex = 1}}    
+      slides[slideIndex-1].style.display = "block"; setTimeout(showSlides, 5000); 
     }}
     </script>
-    """
-    components.html(carousel_code, height=310)
+    """, height=310)
 
 # ==========================================
 # 5. DASHBOARD ADMIN
@@ -398,20 +345,14 @@ def display_banner_carousel():
 def admin_dashboard():
     st.title("👨‍🏫 Dashboard Admin")
     
-    # METRICS SUMMARY
-    users = get_all_users()
-    exams = get_exams()
-    mats = get_materials()
+    users = get_all_users(); exams = get_exams(); mats = get_materials()
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total Pengguna", len(users))
-    c2.metric("Total Soal", len(exams))
-    c3.metric("Materi Aktif", len(mats))
-    
+    c1.metric("Total Pengguna", len(users)); c2.metric("Total Soal", len(exams)); c3.metric("Materi Aktif", len(mats))
     st.write("")
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 Materi", "📝 Bank Soal", "📢 Info & Banner", "📊 Nilai", "👥 User"])
     
-    # TAB 1: MATERI
+    # --- TAB 1: MATERI ---
     with tab1:
         if st.session_state['edit_material_id']:
             mat_data = get_material_by_id(st.session_state['edit_material_id'])
@@ -431,19 +372,13 @@ def admin_dashboard():
                         fn, fd, ft = (e_file.name, e_file.getvalue(), e_file.type) if e_file else (None, None, None)
                         update_material(mat_data['id'], e_cat, e_tit, e_con, e_yt, fn, fd, ft)
                         st.session_state['edit_material_id'] = None; st.success("Updated!"); st.rerun()
-                    if st.form_submit_button("❌ Batal"):
-                        st.session_state['edit_material_id'] = None; st.rerun()
+                    if st.form_submit_button("❌ Batal"): st.session_state['edit_material_id'] = None; st.rerun()
         else:
             with st.expander("➕ Tambah Materi Baru"):
                 with st.form("add_mat_form", clear_on_submit=True):
                     ca, cb = st.columns(2)
-                    with ca:
-                        cat = st.text_input("Kategori")
-                        tit = st.text_input("Judul")
-                        yt = st.text_input("YouTube URL")
-                    with cb:
-                        con = st.text_area("Isi Materi")
-                        f = st.file_uploader("File Pendukung")
+                    with ca: cat = st.text_input("Kategori"); tit = st.text_input("Judul"); yt = st.text_input("YouTube URL")
+                    with cb: con = st.text_area("Isi Materi"); f = st.file_uploader("File Pendukung")
                     if st.form_submit_button("Simpan Materi", type="primary"):
                         fn, fd, ft = (f.name, f.getvalue(), f.type) if f else (None, None, None)
                         add_material(cat, tit, con, yt, fn, fd, ft); st.success("Tersimpan!"); st.rerun()
@@ -462,7 +397,7 @@ def admin_dashboard():
                         if c4.button("🗑️", key=f"delm_{row['id']}"): delete_material(row['id']); st.success("Deleted"); st.rerun()
             else: st.info("Belum ada materi.")
 
-    # TAB 2: SOAL
+    # --- TAB 2: SOAL (DENGAN INPUT DINAMIS) ---
     with tab2:
         if not st.session_state['admin_active_category']:
             st.info("Pilih kategori ujian.")
@@ -497,7 +432,6 @@ def admin_dashboard():
                     top = c3.time_input("Jam Buka", t_op); tcl = c4.time_input("Jam Tutup", t_cl)
                     c5, c6 = st.columns(2)
                     du = c5.number_input("Durasi (Menit)", value=d_dur); mx = c6.number_input("Max Attempt", value=d_max)
-                    
                     if st.form_submit_button("Simpan Jadwal"):
                         s_d = dr[0]; e_d = dr[1] if len(dr)>1 else dr[0]
                         fo = datetime.combine(s_d, top).strftime("%Y-%m-%d %H:%M:%S")
@@ -507,6 +441,7 @@ def admin_dashboard():
 
             st.write("")
             
+            # --- MODE EDIT SOAL (DENGAN GAMBAR) ---
             if st.session_state['edit_q_id']:
                 q_data = get_exam_by_id(st.session_state['edit_q_id'])
                 if q_data:
@@ -514,6 +449,10 @@ def admin_dashboard():
                     with st.form("edit_q_form"):
                         e_sub = st.text_input("Sub Kategori", value=q_data['sub_category'])
                         e_q = st.text_area("Pertanyaan", value=q_data['question'])
+                        
+                        if q_data['q_image']: st.caption("Gambar soal saat ini (terisi)")
+                        e_q_img = st.file_uploader("Ganti Gambar Soal (Opsional)", type=['png','jpg'])
+                        
                         c_opt1, c_opt2 = st.columns(2)
                         with c_opt1:
                             oa = st.text_input("A", value=q_data['opt_a']); ob = st.text_input("B", value=q_data['opt_b']); oc = st.text_input("C", value=q_data['opt_c'])
@@ -521,24 +460,45 @@ def admin_dashboard():
                             od = st.text_input("D", value=q_data['opt_d'] or ""); oe = st.text_input("E", value=q_data['opt_e'] or ""); ans = st.text_input("Kunci", value=q_data['answer'])
                         
                         if st.form_submit_button("Simpan"):
-                            update_exam_data(q_data['id'], ac, e_sub, e_q, q_data['q_image'], oa, None, ob, None, oc, None, od, None, oe, None, ans)
+                            new_qi = e_q_img.getvalue() if e_q_img else q_data['q_image']
+                            update_exam_data(q_data['id'], ac, e_sub, e_q, new_qi, oa, None, ob, None, oc, None, od, None, oe, None, ans)
                             st.session_state['edit_q_id'] = None; st.rerun()
                         if st.form_submit_button("Batal"): st.session_state['edit_q_id'] = None; st.rerun()
             else:
+                # --- TAMBAH SOAL MANUAL (DINAMIS 3/4/5 OPSI + GAMBAR) ---
                 t_man, t_imp = st.tabs(["📝 Tambah Manual", "📤 Import Excel"])
                 with t_man:
-                    with st.form("add_q_form", clear_on_submit=True):
-                        sub = st.text_input("Sub Kategori", "Umum"); q = st.text_area("Pertanyaan")
-                        c_o1, c_o2 = st.columns(2)
-                        with c_o1:
-                            oa = st.text_input("Opsi A"); ob = st.text_input("Opsi B"); oc = st.text_input("Opsi C")
-                        with c_o2:
-                            od = st.text_input("Opsi D"); oe = st.text_input("Opsi E"); ans = st.text_input("Kunci Jawaban")
-                        if st.form_submit_button("Simpan Soal"):
-                            add_exam(ac, sub, q, None, oa, None, ob, None, oc, None, od, None, oe, None, ans); st.success("OK"); st.rerun()
+                    sub = st.text_input("Sub Kategori", "Umum")
+                    q = st.text_area("Pertanyaan")
+                    q_img = st.file_uploader("Gambar Soal (Opsional)", type=['png','jpg'])
+                    
+                    n = st.radio("Jumlah Opsi", [3,4,5], horizontal=True)
+                    ops_data, imgs_data = {}, {}
+                    labels = ['A','B','C','D','E']
+                    
+                    for i in range(n):
+                        lbl = labels[i]
+                        c1, c2 = st.columns([3,1])
+                        ops_data[lbl] = c1.text_input(f"Opsi {lbl}")
+                        imgs_data[lbl] = c2.file_uploader(f"Gbr {lbl}", type=['png','jpg'], key=f"img_op_{lbl}")
+                    
+                    valid_ops = [v for v in ops_data.values() if v]
+                    ans = st.selectbox("Kunci Jawaban", valid_ops if valid_ops else ["Isi opsi dulu"])
+                    
+                    if st.button("Simpan Soal"):
+                        img_q_val = q_img.getvalue() if q_img else None
+                        img_vals = {l: (imgs_data[l].getvalue() if imgs_data[l] else None) for l in labels[:n]}
+                        # Mapping ke parameter fungsi add_exam
+                        add_exam(ac, sub, q, img_q_val, 
+                                 ops_data.get('A'), img_vals.get('A'), 
+                                 ops_data.get('B'), img_vals.get('B'), 
+                                 ops_data.get('C'), img_vals.get('C'), 
+                                 ops_data.get('D'), img_vals.get('D'), 
+                                 ops_data.get('E'), img_vals.get('E'), ans)
+                        st.success("Tersimpan!"); st.rerun()
                 
                 with t_imp:
-                    st.info("Format: Sub Kategori, Pertanyaan, Opsi A, Opsi B, Opsi C, Opsi D, Opsi E, Jawaban Benar")
+                    st.info("Template Excel: Sub Kategori, Pertanyaan, Opsi A, Opsi B, Opsi C, Opsi D, Opsi E, Jawaban Benar")
                     s_data = [{"Sub Kategori": "Logika", "Pertanyaan": "...", "Opsi A": "A", "Opsi B": "B", "Opsi C": "C", "Opsi D": "", "Opsi E": "", "Jawaban Benar": "A"}]
                     df_t = pd.DataFrame(s_data)
                     buf = io.BytesIO(); 
@@ -571,7 +531,7 @@ def admin_dashboard():
                         st.markdown("---")
             else: st.info("Kosong.")
 
-    # TAB 3: BANNER
+    # --- TAB 3: BANNER ---
     with tab3:
         col_b1, col_b2 = st.columns([1, 1])
         with col_b1:
@@ -604,7 +564,7 @@ def admin_dashboard():
                     if c2.button("🗑️", key=f"db_{b['id']}"): delete_banner(b['id']); st.rerun()
                     st.divider()
 
-    # TAB 4: NILAI
+    # --- TAB 4: NILAI ---
     with tab4:
         df = get_results()
         if not df.empty:
@@ -615,7 +575,7 @@ def admin_dashboard():
             st.dataframe(df, use_container_width=True)
         else: st.info("Belum ada data nilai.")
 
-    # TAB 5: USER
+    # --- TAB 5: KELOLA USER (KEMBALI KE ROW LOOP) ---
     with tab5:
         dfu = get_all_users()
         c1, c2, c3 = st.columns(3)
@@ -631,7 +591,53 @@ def admin_dashboard():
                 n = c1.text_input("Nama Lengkap"); r = c2.selectbox("Role", ["student", "admin"])
                 if st.form_submit_button("Tambah"): add_user(u,p,r,n); st.rerun()
         
-        st.dataframe(dfu, use_container_width=True)
+        st.write("### Daftar Pengguna")
+        st.markdown("---")
+        # Header Table
+        c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 1, 1])
+        c1.markdown("**Username**"); c2.markdown("**Nama**"); c3.markdown("**Role**"); c4.markdown(""); c5.markdown("")
+        st.divider()
+        
+        # Loop User dengan Tombol Edit/Delete
+        for i, row in dfu.iterrows():
+            with st.container():
+                c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 1, 1])
+                c1.write(row['username'])
+                c2.write(row['name'])
+                c3.markdown(f":red[{row['role']}]" if row['role']=='admin' else f":blue[{row['role']}]")
+                
+                # Button Edit
+                if c4.button("✏️", key=f"eu_{row['username']}"): 
+                    st.session_state['edit_target_user'] = row['username']
+                    st.rerun()
+                
+                # Button Delete
+                if c5.button("🗑️", key=f"du_{row['username']}"):
+                    if row['username'] != st.session_state['current_user']['username']: # Proteksi diri sendiri
+                        delete_user(row['username'])
+                        st.rerun()
+                    else:
+                        st.error("Tidak bisa hapus diri sendiri")
+                st.markdown("---")
+        
+        # Form Edit User (Popup Logic)
+        if st.session_state['edit_target_user']:
+            ud = get_user(st.session_state['edit_target_user'])
+            if ud:
+                st.info(f"✏️ Edit User: {ud['username']}")
+                with st.form("edit_u"):
+                    en = st.text_input("Nama", value=ud['name'])
+                    er = st.selectbox("Role", ["student","admin"], index=0 if ud['role']=="student" else 1)
+                    ep = st.text_input("Reset Pass (Isi jika ingin ubah)", type="password")
+                    
+                    c1, c2 = st.columns(2)
+                    if c1.form_submit_button("Simpan"): 
+                        update_user_data(ud['username'], en, er, ep if ep else None)
+                        st.session_state['edit_target_user'] = None
+                        st.success("Updated!"); st.rerun()
+                    if c2.form_submit_button("Batal"):
+                        st.session_state['edit_target_user'] = None
+                        st.rerun()
 
 # ==========================================
 # 6. DASHBOARD STUDENT
@@ -639,7 +645,6 @@ def admin_dashboard():
 def student_dashboard():
     user = st.session_state['current_user']
     
-    # Auto Check Time Logic
     attempts = get_all_student_attempts(user['name'])
     all_qs = get_exams()
     for att in attempts:
@@ -663,7 +668,6 @@ def student_dashboard():
 
     tab1, tab2, tab3 = st.tabs(["📚 Materi Pelajaran", "📝 Ujian & Kuis", "🏆 Rapor Nilai"])
 
-    # TAB MATERI
     with tab1:
         df = get_materials()
         if not df.empty:
@@ -677,7 +681,6 @@ def student_dashboard():
                         st.download_button(f"⬇️ Download {r['file_name']}", r['file_data'], file_name=r['file_name'])
         else: st.info("Belum ada materi tersedia.")
 
-    # TAB UJIAN (GRID)
     with tab2:
         cats = sorted(list(set([e['category'] for e in all_qs])))
         
@@ -786,7 +789,6 @@ def student_dashboard():
                 st.session_state['selected_exam_cat'] = None
                 st.query_params["exam_done"]="true"; st.query_params["cat"]=pcat; st.query_params["u_id"]=user['username']; st.rerun()
 
-    # TAB NILAI
     with tab3:
         df = get_results()
         if not df.empty:
