@@ -27,10 +27,10 @@ def get_wib_now():
 # --- CUSTOM CSS ---
 st.markdown("""
 <style>
-    /* 1. Global */
+    /* Global */
     html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
 
-    /* 2. Card Containers */
+    /* Card Containers */
     [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] > div {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-radius: 12px;
@@ -38,7 +38,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
     }
 
-    /* 3. Question Card */
+    /* Question Card */
     .question-container {
         border: 1px solid rgba(128, 128, 128, 0.2);
         border-left: 5px solid #ff4b4b;
@@ -47,7 +47,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
 
-    /* 4. Sidebar Nav */
+    /* Sidebar Nav - Grid Style */
     .nav-box {
         display: inline-block; width: 35px; height: 35px;
         line-height: 35px; text-align: center; margin: 3px;
@@ -55,24 +55,20 @@ st.markdown("""
         color: white !important;
         text-shadow: 0 1px 2px rgba(0,0,0,0.5);
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        transition: transform 0.1s;
     }
+    .nav-box:hover { transform: scale(1.1); }
 
-    /* 5. Grid Exam */
+    /* General */
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* 6. Icon Buttons */
     button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
-        padding: 0px 8px !important;
-        border-radius: 4px !important;
+        padding: 0px 8px !important; border-radius: 4px !important;
         min-height: 32px !important; height: 32px !important;
-        border: 1px solid rgba(128,128,128,0.2) !important;
-        margin: 0px !important;
+        border: 1px solid rgba(128,128,128,0.2) !important; margin: 0px !important;
     }
-    button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
-    button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
-
-    /* 7. General */
+    
     .stTabs [data-baseweb="tab-list"] { gap: 15px; }
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     .stButton > button[kind="primary"] { font-weight: 600; border-radius: 8px; }
@@ -83,7 +79,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE MANAGER (TURSO + CACHING)
+# 2. DATABASE MANAGER (TURSO + CACHE)
 # ==========================================
 
 @st.cache_resource(ttl=3600)
@@ -140,7 +136,6 @@ init_db()
 
 # --- DATABASE HELPERS ---
 
-# [OPTIMISASI] Cache Data Berat
 @st.cache_data(ttl=600)
 def get_exams():
     rows = run_query("SELECT * FROM exams")
@@ -156,8 +151,7 @@ def get_exams():
     return formatted
 
 @st.cache_data(ttl=600)
-def get_materials(): 
-    return pd.DataFrame(run_query("SELECT * FROM materials"))
+def get_materials(): return pd.DataFrame(run_query("SELECT * FROM materials"))
 
 def clear_cache():
     get_exams.clear()
@@ -213,20 +207,10 @@ def clear_student_attempt(name, cat):
     run_query("DELETE FROM student_exam_attempts WHERE student_name=? AND category=?", (name, cat))
     run_query("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
 
-def save_batch_answers(name, cat, answers_dict):
-    conn = get_db_connection()
-    if not conn: return
-    c = conn.cursor()
-    try:
-        c.execute("BEGIN TRANSACTION")
-        for q_id, val in answers_dict.items():
-            doubt_val = 1 if val.get('doubt') else 0
-            ans = val.get('answer')
-            if ans: 
-                c.execute("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, q_id, ans, doubt_val))
-        conn.commit()
-    except Exception as e:
-        st.error(f"Gagal menyimpan: {e}")
+# [OPTIMISASI] Fungsi Simpan Single (Cepat)
+def save_single_answer(name, cat, q_id, ans, doubt):
+    doubt_val = 1 if doubt else 0
+    run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, q_id, ans, doubt_val))
 
 def get_temp_answers_full(name, cat):
     rows = run_query("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
@@ -248,11 +232,32 @@ if 'current_user' not in st.session_state: st.session_state['current_user'] = No
 for k in ['admin_active_category','edit_target_user','edit_q_id','selected_exam_cat','edit_material_id']:
     if k not in st.session_state: st.session_state[k] = None
 
+# [OPTIMISASI] State Khusus Jawaban Lokal (Agar tidak load DB terus)
+if 'local_answers' not in st.session_state: st.session_state['local_answers'] = {}
+
 def check_session_persistence():
     if st.session_state['current_user'] is None and "u_id" in st.query_params:
         user_data = get_user(st.query_params["u_id"])
         if user_data: st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
     if "cat" in st.query_params: st.session_state['selected_exam_cat'] = st.query_params["cat"]
+
+# [OPTIMISASI] Callback Instan: Update RAM -> Update DB Background
+def on_answer_change(q_id, category):
+    user_name = st.session_state['current_user']['name']
+    
+    # Ambil nilai dari widget
+    rad_key = f"q_{q_id}"
+    chk_key = f"chk_{q_id}"
+    ans = st.session_state.get(rad_key)
+    dbt = st.session_state.get(chk_key, False)
+    
+    # 1. Update State Lokal (Agar Navigasi update instan saat refresh)
+    if category not in st.session_state['local_answers']:
+        st.session_state['local_answers'][category] = {}
+    st.session_state['local_answers'][category][q_id] = {'answer': ans, 'doubt': dbt}
+    
+    # 2. Update DB (Single Row Write - Cepat)
+    save_single_answer(user_name, category, q_id, ans, dbt)
 
 def login_page():
     st.write(""); st.write(""); st.write("")
@@ -273,6 +278,7 @@ def login_page():
 def logout_button():
     if st.sidebar.button("🚪 Keluar", type="primary"):
         st.session_state['current_user'] = None
+        st.session_state['local_answers'] = {} # Clear local cache
         for k in ['edit_q_id', 'edit_material_id', 'selected_exam_cat', 'admin_active_category']: st.session_state[k] = None
         st.query_params.clear(); st.rerun()
 
@@ -504,35 +510,53 @@ def admin_dashboard():
                     if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. STUDENT DASHBOARD
+# 6. STUDENT DASHBOARD (FAST NAVIGATION)
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
     
-    # [FIX] CHECK RESULT DI AWAL
+    # [FIX: POP-UP PRIORITY] Cek hasil di awal sebelum render apa pun
     if "exam_done" in st.query_params:
         tc = st.query_params.get("cat")
         lr = get_latest_student_result(user['name'], tc)
         if lr:
             show_result_popup(lr['score'], (lr['score']/100)*lr['total_questions'] if lr['total_questions']>0 else 0, lr['total_questions'], tc)
 
-    all_qs = get_exams() # Cached Data
+    all_qs = get_exams() # Cached
     atts = get_all_student_attempts(user['name'])
     
-    # Auto Check Time (Timezone WIB)
+    # [FIX: TIMER AUTO-SUBMIT]
+    trigger_submit = False # Flag untuk submit otomatis
+    
     for att in atts:
         cat = att['category']; sch = get_schedule(cat)
         if sch:
             s_dt = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S")
             dead = s_dt + timedelta(minutes=sch['duration_minutes'])
-            # Compare WIB Time
+            # Jika waktu habis secara real-time
             if (dead - get_wib_now()).total_seconds() <= 0:
-                raw=[e for e in all_qs if e['category']==cat]; ans=get_temp_answers_full(user['name'],cat)
-                sc=sum([1 for s in raw if ans.get(s['id'],{}).get('answer')==s['jawaban']])
-                val=(sc/len(raw))*100 if raw else 0
-                add_result(user['name'],cat,val,len(raw),get_wib_now().strftime("%Y-%m-%d %H:%M:%S"))
-                clear_student_attempt(user['name'],cat)
-                st.query_params["exam_done"]="true"; st.query_params["cat"]=cat; st.query_params["u_id"]=user['username']; st.rerun()
+                trigger_submit = True
+                target_cat = cat
+
+    # LOGIKA SUBMIT OTOMATIS (Tanpa GUI)
+    if trigger_submit:
+        # Simpan state terakhir dari session state jika ada
+        if target_cat in st.session_state['local_answers']:
+            save_batch_answers(user['name'], target_cat, st.session_state['local_answers'][target_cat])
+        
+        # Hitung Nilai
+        raw=[e for e in all_qs if e['category']==target_cat]
+        ans=get_temp_answers_full(user['name'], target_cat)
+        sc=sum([1 for s in raw if ans.get(s['id'],{}).get('answer')==s['jawaban']])
+        val=(sc/len(raw))*100 if raw else 0
+        
+        add_result(user['name'], target_cat, val, len(raw), get_wib_now().strftime("%Y-%m-%d %H:%M:%S"))
+        clear_student_attempt(user['name'], target_cat)
+        
+        # Redirect
+        st.session_state['selected_exam_cat'] = None
+        st.query_params["exam_done"]="true"; st.query_params["cat"]=target_cat; st.query_params["u_id"]=user['username']
+        st.rerun()
 
     st.markdown(f"### 👋 Halo, {user['name']}"); display_banner_carousel(); st.write("")
     tab1, tab2, tab3 = st.tabs(["📚 Materi", "📝 Ujian", "🏆 Nilai"])
@@ -551,7 +575,7 @@ def student_dashboard():
                         st.download_button(f"⬇️ Download {r['file_name']}", r['file_data'], file_name=r['file_name'])
         else: st.info("Belum ada materi tersedia.")
 
-    # TAB UJIAN (GRID)
+    # TAB UJIAN (GRID & QUESTIONS)
     with tab2:
         cats = sorted(list(set([e['category'] for e in all_qs])))
         
@@ -578,7 +602,7 @@ def student_dashboard():
                             if st.button(f"Buka Soal", key=f"open_{cat}", use_container_width=True):
                                 st.session_state['selected_exam_cat'] = cat; st.query_params["cat"] = cat; st.rerun()
         else:
-            # QUESTION VIEW
+            # QUESTION VIEW (FAST MODE)
             pcat = st.session_state['selected_exam_cat']
             
             c_back, c_title = st.columns([1, 5])
@@ -589,7 +613,7 @@ def student_dashboard():
                     st.rerun()
             with c_title: st.markdown(f"## 📝 Ujian: {pcat}")
             
-            sch = get_schedule(pcat); show_exam = False; trigger_submit = False
+            sch = get_schedule(pcat); show_exam = False
             if sch:
                 odt = datetime.strptime(sch['open_time'], "%Y-%m-%d %H:%M:%S")
                 cdt = datetime.strptime(sch['close_time'], "%Y-%m-%d %H:%M:%S")
@@ -601,8 +625,7 @@ def student_dashboard():
 
                 if att:
                     dead = datetime.strptime(att['start_time'], "%Y-%m-%d %H:%M:%S") + timedelta(minutes=dur)
-                    if (dead - now_wib).total_seconds() <= 0: trigger_submit = True
-                    else:
+                    if (dead - now_wib).total_seconds() > 0:
                         with st.sidebar:
                             display_timer_js((dead - now_wib).total_seconds())
                         show_exam = True
@@ -619,83 +642,62 @@ def student_dashboard():
 
             if show_exam:
                 raw = [e for e in all_qs if e['category']==pcat]
-                # Load existing answers from DB
-                saved_data = get_temp_answers_full(user['name'], pcat)
                 
-                # SIDEBAR NAV
+                # [OPTIMISASI] Load Initial Data from DB ke Session State (HANYA SEKALI)
+                if pcat not in st.session_state['local_answers']:
+                    # Tarik dari DB pertama kali
+                    db_data = get_temp_answers_full(user['name'], pcat)
+                    st.session_state['local_answers'][pcat] = db_data
+                
+                current_answers = st.session_state['local_answers'][pcat]
+                
+                # SIDEBAR NAV (Baca dari Session State = Cepat)
                 with st.sidebar:
                     st.write("### 🧭 Navigasi Soal")
-                    st.caption("Klik 'Simpan' untuk update status.")
+                    st.caption("Navigasi update instan.")
                     grid_html = '<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px;">'
                     for i, q in enumerate(raw):
-                        d = saved_data.get(q['id'], {})
+                        d = current_answers.get(q['id'], {})
                         bg = "#95a5a6"
                         if d.get('answer'): bg = "#f1c40f" if d.get('doubt') else "#27ae60"
                         grid_html += f'<div class="nav-box" style="background-color:{bg}">{i+1}</div>'
                     grid_html += '</div>'
                     st.markdown(grid_html, unsafe_allow_html=True)
 
-                # [FIX: FORM WRAPPER]
-                with st.form("exam_form"):
-                    curr_sub = None
-                    for idx, s in enumerate(raw):
-                        if s['sub_category'] != curr_sub:
-                            st.markdown(f"#### 📑 {s['sub_category']}"); st.markdown("---"); curr_sub = s['sub_category']
-                        
-                        st.markdown(f"<div class='question-container'><b>Soal {idx+1}:</b><br>{s['tanya']}</div>", unsafe_allow_html=True)
-                        if s['q_img'] and isinstance(s['q_img'], bytes): st.image(s['q_img'], width=400)
-                        
-                        if len(s['opsi']) > 0:
-                            cols = st.columns(len(s['opsi']))
-                            for i, c in enumerate(cols):
-                                with c: 
-                                    if s['opsi_img'][i] and isinstance(s['opsi_img'][i], bytes): st.image(s['opsi_img'][i], width=100)
-                        
-                        # Pre-select radio from saved data
-                        cur_d = saved_data.get(s['id'], {})
-                        prev_ans = cur_d.get('answer')
-                        idx_sel = s['opsi'].index(prev_ans) if prev_ans in s['opsi'] else None
-                        
-                        c1, c2 = st.columns([4, 1])
-                        with c1: 
-                            # [FIX: NO ON_CHANGE CALLBACK]
-                            st.radio(f"Jawab {idx+1}", s['opsi'], key=f"q_{s['id']}", index=idx_sel, label_visibility="collapsed")
-                        with c2: 
-                            st.checkbox("Ragu", value=cur_d.get('doubt', False), key=f"chk_{s['id']}")
+                # QUESTION AREA (CALLBACK MODE = INSTANT NAV)
+                curr_sub = None
+                for idx, s in enumerate(raw):
+                    if s['sub_category'] != curr_sub:
+                        st.markdown(f"#### 📑 {s['sub_category']}"); st.markdown("---"); curr_sub = s['sub_category']
                     
-                    st.divider()
-                    c_sub1, c_sub2 = st.columns(2)
+                    st.markdown(f"<div class='question-container'><b>Soal {idx+1}:</b><br>{s['tanya']}</div>", unsafe_allow_html=True)
+                    if s['q_img'] and isinstance(s['q_img'], bytes): st.image(s['q_img'], width=400)
                     
-                    # [FIX: MANUAL SAVE BUTTON]
-                    if c_sub1.form_submit_button("💾 Simpan Jawaban"):
-                        answers_to_save = {}
-                        for q in raw:
-                            ans = st.session_state.get(f"q_{q['id']}")
-                            dbt = st.session_state.get(f"chk_{q['id']}", False)
-                            if ans: answers_to_save[q['id']] = {'answer': ans, 'doubt': dbt}
-                        save_batch_answers(user['name'], pcat, answers_to_save)
-                        st.rerun()
-                        
-                    if c_sub2.form_submit_button("✅ KIRIM FINAL", type="primary"):
-                        answers_to_save = {}
-                        for q in raw:
-                            ans = st.session_state.get(f"q_{q['id']}")
-                            dbt = st.session_state.get(f"chk_{q['id']}", False)
-                            if ans: answers_to_save[q['id']] = {'answer': ans, 'doubt': dbt}
-                        save_batch_answers(user['name'], pcat, answers_to_save)
-                        trigger_submit = True
-
-            if trigger_submit:
-                raw = [e for e in all_qs if e['category']==pcat]
-                final = get_temp_answers_full(user['name'], pcat)
-                score = 0
-                for s in raw:
-                    if final.get(s['id'], {}).get('answer') == s['jawaban']: score += 1
-                val = (score/len(raw))*100 if len(raw)>0 else 0
-                add_result(user['name'], pcat, val, len(raw), get_wib_now().strftime("%Y-%m-%d %H:%M:%S"))
-                clear_student_attempt(user['name'], pcat)
-                st.session_state['selected_exam_cat'] = None
-                st.query_params["exam_done"]="true"; st.query_params["cat"]=pcat; st.query_params["u_id"]=user['username']; st.rerun()
+                    if len(s['opsi']) > 0:
+                        cols = st.columns(len(s['opsi']))
+                        for i, c in enumerate(cols):
+                            with c: 
+                                if s['opsi_img'][i] and isinstance(s['opsi_img'][i], bytes): st.image(s['opsi_img'][i], width=100)
+                    
+                    # Get value from local state
+                    cur_d = current_answers.get(s['id'], {})
+                    prev_ans = cur_d.get('answer')
+                    idx_sel = s['opsi'].index(prev_ans) if prev_ans in s['opsi'] else None
+                    
+                    c1, c2 = st.columns([4, 1])
+                    with c1: 
+                        # Callback untuk update state & DB background
+                        st.radio(f"Jawab {idx+1}", s['opsi'], key=f"q_{s['id']}", index=idx_sel, 
+                                 on_change=input_callback, args=(s['id'], pcat), label_visibility="collapsed")
+                    with c2: 
+                        st.checkbox("Ragu", value=cur_d.get('doubt', False), key=f"chk_{s['id']}", 
+                                    on_change=input_callback, args=(s['id'], pcat))
+                
+                st.divider()
+                if st.button("✅ KIRIM JAWABAN FINAL", type="primary", use_container_width=True):
+                    # Trigger final submit manually
+                    trigger_submit = True
+                    st.rerun() # Force rerun to catch the logic at top
 
     # TAB NILAI
     with tab3:
