@@ -8,6 +8,7 @@ import io
 import pytz 
 
 # MENGGUNAKAN LIBSQL (TURSO)
+# Jika terjadi error import, pastikan requirements.txt berisi: libsql-experimental
 import libsql_experimental as sqlite3 
 
 # ==========================================
@@ -96,7 +97,8 @@ def get_db_connection():
         conn = sqlite3.connect(url, auth_token=token)
         return conn
     except Exception as e:
-        st.error(f"Koneksi Database Gagal: {e}")
+        # Fallback pesan error yang lebih informatif tanpa mematikan aplikasi
+        st.warning(f"Koneksi Database Bermasalah: {e}. Cek Secrets.")
         return None
 
 def run_query(query, params=()):
@@ -114,9 +116,11 @@ def run_query(query, params=()):
             conn.commit()
             return True
     except Exception as e:
-        st.error(f"Query Error: {e}")
+        # Log error query tapi jangan crash
+        print(f"Query Error: {e} | Query: {query}")
         return []
 
+# [FIX: ROBUST INIT DB]
 def init_db():
     queries = [
         '''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT, name TEXT)''',
@@ -130,14 +134,29 @@ def init_db():
     ]
     conn = get_db_connection()
     if conn:
-        c = conn.cursor()
-        for q in queries: c.execute(q)
-        conn.commit()
-        res = run_query("SELECT count(*) as cnt FROM users")
-        if res and res[0]['cnt'] == 0:
-            run_query("INSERT INTO users VALUES (?, ?, ?, ?)", ('admin', '123', 'admin', 'Administrator'))
-            run_query("INSERT INTO users VALUES (?, ?, ?, ?)", ('siswa1', '123', 'student', 'Budi Santoso'))
+        try:
+            c = conn.cursor()
+            for q in queries:
+                try:
+                    # Strip untuk menghapus whitespace aneh yang bisa memicu ValueError
+                    c.execute(q.strip())
+                except Exception as e:
+                    print(f"Init Table Error (Ignorable if exists): {e}")
+            conn.commit()
+            
+            # Cek user default hanya jika tabel users berhasil di-query
+            try:
+                res = c.execute("SELECT count(*) as cnt FROM users").fetchone()
+                if res and res[0] == 0:
+                    c.execute("INSERT INTO users VALUES (?, ?, ?, ?)", ('admin', '123', 'admin', 'Administrator'))
+                    c.execute("INSERT INTO users VALUES (?, ?, ?, ?)", ('siswa1', '123', 'student', 'Budi Santoso'))
+                    conn.commit()
+            except Exception: pass
+            
+        except Exception as e:
+            st.error(f"Database Init Critical Error: {e}")
 
+# Jalankan init
 init_db()
 
 # --- DATABASE HELPERS ---
@@ -146,18 +165,21 @@ init_db()
 def get_exams():
     rows = run_query("SELECT * FROM exams")
     formatted = []
+    if not rows: return []
     for r in rows:
-        raw_opsi = [r['opt_a'], r['opt_b'], r['opt_c'], r['opt_d'], r['opt_e']]
-        raw_imgs = [r['opt_a_img'], r['opt_b_img'], r['opt_c_img'], r['opt_d_img'], r['opt_e_img']]
+        raw_opsi = [r.get('opt_a'), r.get('opt_b'), r.get('opt_c'), r.get('opt_d'), r.get('opt_e')]
+        raw_imgs = [r.get('opt_a_img'), r.get('opt_b_img'), r.get('opt_c_img'), r.get('opt_d_img'), r.get('opt_e_img')]
         valid_opsi, valid_imgs = [], []
         for i in range(len(raw_opsi)):
             if raw_opsi[i] and str(raw_opsi[i]).strip() != "":
                 valid_opsi.append(raw_opsi[i]); valid_imgs.append(raw_imgs[i])
-        formatted.append({"id": r['id'], "category": r['category'], "sub_category": r['sub_category'] if 'sub_category' in r else "Umum", "tanya": r['question'], "q_img": r['q_image'], "opsi": valid_opsi, "opsi_img": valid_imgs, "jawaban": r['answer']})
+        formatted.append({"id": r['id'], "category": r['category'], "sub_category": r.get('sub_category', 'Umum'), "tanya": r['question'], "q_img": r['q_image'], "opsi": valid_opsi, "opsi_img": valid_imgs, "jawaban": r['answer']})
     return formatted
 
 @st.cache_data(ttl=600)
-def get_materials(): return pd.DataFrame(run_query("SELECT * FROM materials"))
+def get_materials(): 
+    res = run_query("SELECT * FROM materials")
+    return pd.DataFrame(res) if res else pd.DataFrame()
 
 def clear_cache():
     get_exams.clear()
@@ -166,7 +188,9 @@ def clear_cache():
 def get_user(u): 
     res = run_query("SELECT * FROM users WHERE username = ?", (u,))
     return res[0] if res else None
-def get_all_users(): return pd.DataFrame(run_query("SELECT username, role, name FROM users"))
+def get_all_users(): 
+    res = run_query("SELECT username, role, name FROM users")
+    return pd.DataFrame(res) if res else pd.DataFrame()
 def add_user(u, p, r, n): run_query("INSERT INTO users VALUES (?, ?, ?, ?)", (u, p, r, n)); return True
 def update_user_data(u, n, r, np=None):
     if np: run_query("UPDATE users SET name=?, role=?, password=? WHERE username=?", (n, r, np, u))
@@ -232,16 +256,19 @@ def save_bulk_answers(name, cat, answers_dict):
                 c.execute("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, qid, ans, doubt_val))
         conn.commit()
     except Exception as e:
-        st.error(f"Save Error: {e}")
+        print(f"Save Error: {e}")
 
 def get_temp_answers_full(name, cat):
     rows = run_query("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
     result = {}
-    for r in rows: result[r['question_id']] = {'answer': r['answer'], 'doubt': bool(r['is_doubtful'])}
+    if rows:
+        for r in rows: result[r['question_id']] = {'answer': r['answer'], 'doubt': bool(r['is_doubtful'])}
     return result
 def get_student_result_count(name, cat): res=run_query("SELECT count(*) as cnt FROM results WHERE student_name=? AND category=?", (name, cat)); return res[0]['cnt'] if res else 0
 def add_result(name, cat, sc, tot, dt): run_query("INSERT INTO results (student_name, category, score, total_questions, date) VALUES (?, ?, ?, ?, ?)", (name, cat, sc, tot, dt))
-def get_results(): return pd.DataFrame(run_query("SELECT * FROM results"))
+def get_results(): 
+    res = run_query("SELECT * FROM results")
+    return pd.DataFrame(res) if res else pd.DataFrame()
 def get_latest_student_result(name, cat): res=run_query("SELECT * FROM results WHERE student_name=? AND category=? ORDER BY id DESC LIMIT 1", (name, cat)); return res[0] if res else None
 def add_banner(typ, cont, img): run_query("INSERT INTO banners (type, content, image_data, created_at) VALUES (?, ?, ?, ?)", (typ, cont, img, get_wib_now().strftime("%Y-%m-%d")))
 def get_banners(): return run_query("SELECT * FROM banners ORDER BY id DESC")
@@ -395,7 +422,9 @@ def admin_dashboard():
     # --- TAB 2: BANK SOAL ---
     with tab2:
         if not st.session_state['admin_active_category']:
-            cats = sorted(list(set([e['category'] for e in get_exams()])))
+            # Ambil kategori unik dengan aman
+            ex_data = get_exams()
+            cats = sorted(list(set([e['category'] for e in ex_data]))) if ex_data else []
             c1,c2=st.columns(2); pc=c1.selectbox("Pilih Kategori", ["--"]+cats); ic=c2.text_input("Buat Baru")
             if st.button("Kelola"): st.session_state['admin_active_category']=ic if ic else (pc if pc!="--" else None); st.rerun()
         else:
@@ -503,19 +532,20 @@ def admin_dashboard():
         
         st.write("### Daftar User")
         dfu = get_all_users()
-        c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1]); c1.markdown("**User**"); c2.markdown("**Nama**"); c3.markdown("**Role**")
-        st.divider()
-        
-        for i, row in dfu.iterrows():
-            with st.container():
-                c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1])
-                c1.write(row['username'])
-                c2.write(row['name'])
-                c3.markdown(f":red[{row['role']}]" if row['role']=='admin' else f":blue[{row['role']}]")
-                if c4.button("✏️", key=f"eu_{row['username']}"): st.session_state['edit_target_user']=row['username']; st.rerun()
-                if c5.button("🗑️", key=f"du_{row['username']}"): 
-                    if row['username'] != st.session_state['current_user']['username']: delete_user(row['username']); st.rerun()
-                st.markdown("---")
+        if not dfu.empty:
+            c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1]); c1.markdown("**User**"); c2.markdown("**Nama**"); c3.markdown("**Role**")
+            st.divider()
+            
+            for i, row in dfu.iterrows():
+                with st.container():
+                    c1,c2,c3,c4,c5 = st.columns([2,3,2,1,1])
+                    c1.write(row['username'])
+                    c2.write(row['name'])
+                    c3.markdown(f":red[{row['role']}]" if row['role']=='admin' else f":blue[{row['role']}]")
+                    if c4.button("✏️", key=f"eu_{row['username']}"): st.session_state['edit_target_user']=row['username']; st.rerun()
+                    if c5.button("🗑️", key=f"du_{row['username']}"): 
+                        if row['username'] != st.session_state['current_user']['username']: delete_user(row['username']); st.rerun()
+                    st.markdown("---")
         
         if st.session_state['edit_target_user']:
             ud = get_user(st.session_state['edit_target_user'])
@@ -529,7 +559,7 @@ def admin_dashboard():
                     if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. STUDENT DASHBOARD (PAGINATION)
+# 6. STUDENT DASHBOARD (LOGIKA FINAL)
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
@@ -572,15 +602,10 @@ def student_dashboard():
 
     # [SUBMIT OTOMATIS (WAKTU HABIS)]
     if trigger_submit_final and target_cat_final:
-        # 1. Ambil paksa semua jawaban dari Widget saat ini
         final_answers = collect_all_answers_from_widgets(target_cat_final)
-        
-        # 2. Simpan Batch ke DB
         save_bulk_answers(user['name'], target_cat_final, final_answers)
         
-        # 3. Hitung Nilai dari Data Final
         raw=[e for e in all_qs if e['category']==target_cat_final]
-        # Kita pakai data dari RAM final_answers untuk scoring agar akurat 100%
         sc=sum([1 for s in raw if final_answers.get(s['id'],{}).get('answer') == s['jawaban']])
         val=(sc/len(raw))*100 if raw else 0
         
@@ -611,7 +636,8 @@ def student_dashboard():
 
     # TAB UJIAN (PAGINATION)
     with tab2:
-        cats = sorted(list(set([e['category'] for e in all_qs])))
+        # Gunakan list comprehension aman
+        cats = sorted(list(set([e['category'] for e in all_qs]))) if all_qs else []
         
         if st.session_state['selected_exam_cat'] is None:
             # GRID VIEW
@@ -685,46 +711,38 @@ def student_dashboard():
             if show_exam:
                 raw = [e for e in all_qs if e['category']==pcat]
                 
-                # --- LOAD INITIAL DB DATA TO LOCAL STATE (ONCE) ---
                 if pcat not in st.session_state['local_answers']:
                     st.session_state['local_answers'][pcat] = get_temp_answers_full(user['name'], pcat)
                 
                 local_data = st.session_state['local_answers'][pcat]
                 
-                # --- UPDATE RAM FUNCTION (NO DB CALL) ---
                 def update_ram(qid):
-                    # Callback ini hanya update Session State
                     ans = st.session_state.get(f"rad_{qid}")
                     dbt = st.session_state.get(f"chk_{qid}")
-                    if ans:
-                        local_data[qid] = {'answer': ans, 'doubt': dbt}
+                    if ans: local_data[qid] = {'answer': ans, 'doubt': dbt}
 
-                # --- NAVIGASI ---
                 def go_jump(idx): 
-                    # Simpan soal saat ini ke DB (Background) sebelum pindah
                     curr_q = raw[st.session_state.q_idx]
                     if curr_q['id'] in local_data:
                         save_single_answer(user['name'], pcat, curr_q['id'], local_data[curr_q['id']]['answer'], local_data[curr_q['id']]['doubt'])
                     st.session_state.q_idx = idx
 
-                # --- SIDEBAR NAVIGATION (READ RAM) ---
+                # --- SIDEBAR NAVIGATION ---
                 with st.sidebar:
                     st.write("### 🧭 Navigasi Soal")
                     cols = st.columns(5)
                     for i, q in enumerate(raw):
                         d = local_data.get(q['id'], {})
-                        # Color Logic (Baca RAM, jadi instan berubah)
-                        if i == st.session_state.q_idx: btn_type = "primary" # Active
-                        elif d.get('doubt'): btn_type = "secondary" # Ragu (Kuning via CSS/Emoji)
-                        elif d.get('answer'): btn_type = "primary" # Dijawab (Biru/Primary)
-                        else: btn_type = "secondary" # Kosong
+                        if i == st.session_state.q_idx: btn_type = "primary"
+                        elif d.get('doubt'): btn_type = "secondary"
+                        elif d.get('answer'): btn_type = "primary"
+                        else: btn_type = "secondary" 
                         
                         label = str(i+1)
                         if d.get('doubt'): label = f"⚠️ {i+1}"
                         elif d.get('answer'): label = f"✅ {i+1}"
                         
-                        if cols[i%5].button(label, key=f"nav_{i}", type=btn_type, on_click=go_jump, args=(i,)):
-                            pass
+                        if cols[i%5].button(label, key=f"nav_{i}", type=btn_type, on_click=go_jump, args=(i,)): pass
 
                 # --- DISPLAY CURRENT QUESTION ---
                 current_q = raw[st.session_state.q_idx]
@@ -753,26 +771,19 @@ def student_dashboard():
                 c_prev, c_dbt, c_next = st.columns([1, 2, 1])
                 
                 if c_prev.button("⬅️ Sebelumnya", disabled=(st.session_state.q_idx == 0)):
-                    # Save DB saat pindah
                     if q_id in local_data: save_single_answer(user['name'], pcat, q_id, local_data[q_id]['answer'], local_data[q_id]['doubt'])
                     st.session_state.q_idx -= 1
                     st.rerun()
 
                 if st.session_state.q_idx < len(raw) - 1:
                     if c_next.button("Selanjutnya ➡️", type="primary"):
-                        # Save DB saat pindah
                         if q_id in local_data: save_single_answer(user['name'], pcat, q_id, local_data[q_id]['answer'], local_data[q_id]['doubt'])
                         st.session_state.q_idx += 1
                         st.rerun()
                 else:
                     if c_next.button("✅ Kirim Selesai", type="primary"):
-                        # Save Last Question to DB
                         if q_id in local_data: save_single_answer(user['name'], pcat, q_id, local_data[q_id]['answer'], local_data[q_id]['doubt'])
-                        
-                        # Hitung Nilai dari RAM (Data Paling Update)
                         final_answers = local_data
-                        
-                        # Save All Batch (Backup)
                         save_bulk_answers(user['name'], pcat, final_answers)
                         
                         sc = sum([1 for s in raw if final_answers.get(s['id'],{}).get('answer') == s['jawaban']])
