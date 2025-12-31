@@ -284,9 +284,9 @@ def check_session_persistence():
             st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
     
     # 2. Exam Persistence (Agar tidak balik ke awal saat refresh)
+    # [FIX: PRIORITIZE URL PARAM]
     if "cat" in st.query_params:
-        if st.session_state['selected_exam_cat'] is None:
-            st.session_state['selected_exam_cat'] = st.query_params["cat"]
+        st.session_state['selected_exam_cat'] = st.query_params["cat"]
 
 def login_page():
     st.write(""); st.write(""); st.write("")
@@ -575,34 +575,19 @@ def student_dashboard():
                 trigger_submit_final = True
                 target_cat_final = cat
 
-    # [HELPER: COLLECT ALL WIDGET VALUES] (Dipanggil saat Submit/Timeout)
-    def collect_all_answers_from_widgets(cat_name):
-        current_answers = st.session_state['local_answers'].get(cat_name, {})
-        # Loop semua soal di kategori ini
-        raw_qs = [e for e in all_qs if e['category']==cat_name]
-        for q in raw_qs:
-            # Ambil nilai langsung dari Widget jika ada
-            w_ans = st.session_state.get(f"rad_{q['id']}")
-            w_dbt = st.session_state.get(f"chk_{q['id']}")
-            if w_ans is not None:
-                current_answers[q['id']] = {'answer': w_ans, 'doubt': w_dbt}
-        return current_answers
-
     # [SUBMIT OTOMATIS (WAKTU HABIS)]
     if trigger_submit_final and target_cat_final:
-        # [FIX] Pause & Collect
-        # Tunggu UI render sebentar agar widget value ter-register
-        time.sleep(0.5) 
+        # [FIX] Nilai 0 -> Ambil jawaban terakhir dari RAM
+        final_answers = st.session_state['local_answers'].get(target_cat_final, {})
         
-        # 1. Ambil paksa semua jawaban dari Widget saat ini
-        final_answers = collect_all_answers_from_widgets(target_cat_final)
-        
-        # 2. Simpan Batch ke DB
+        # Merge dengan data dari DB (jika ada yg sudah tersimpan sebelumnya)
+        db_answers = get_temp_answers_full(user['name'], target_cat_final)
+        for k, v in db_answers.items():
+            if k not in final_answers: final_answers[k] = v
+            
         save_bulk_answers(user['name'], target_cat_final, final_answers)
         
-        # 3. Hitung Nilai dari Data Final
         raw=[e for e in all_qs if e['category']==target_cat_final]
-        # Kita pakai data dari RAM final_answers untuk scoring agar akurat 100%
         sc=sum([1 for s in raw if final_answers.get(s['id'],{}).get('answer') == s['jawaban']])
         val=(sc/len(raw))*100 if raw else 0
         
@@ -656,7 +641,7 @@ def student_dashboard():
                             st.markdown(f"<div class='exam-card-header'>📚 {cat}</div>", unsafe_allow_html=True)
                             st.markdown(f"<div class='exam-card-info' style='color:{stat_col}'>{stat_txt}</div>", unsafe_allow_html=True)
                             if st.button(f"Buka Soal", key=f"open_{cat}", use_container_width=True):
-                                # [FIX: LOCK NAVIGATION & DELAY]
+                                # [FIX: LOCK NAVIGATION VIA QUERY PARAMS]
                                 st.session_state['selected_exam_cat'] = cat
                                 st.session_state.q_idx = 0
                                 st.query_params["cat"] = cat
