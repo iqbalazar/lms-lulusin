@@ -8,7 +8,6 @@ import io
 import pytz 
 
 # MENGGUNAKAN LIBSQL (TURSO)
-# Jika terjadi error import, pastikan requirements.txt berisi: libsql-experimental
 import libsql_experimental as sqlite3 
 
 # ==========================================
@@ -97,8 +96,7 @@ def get_db_connection():
         conn = sqlite3.connect(url, auth_token=token)
         return conn
     except Exception as e:
-        # Fallback pesan error yang lebih informatif tanpa mematikan aplikasi
-        st.warning(f"Koneksi Database Bermasalah: {e}. Cek Secrets.")
+        st.error(f"Koneksi Database Gagal: {e}")
         return None
 
 def run_query(query, params=()):
@@ -116,11 +114,9 @@ def run_query(query, params=()):
             conn.commit()
             return True
     except Exception as e:
-        # Log error query tapi jangan crash
-        print(f"Query Error: {e} | Query: {query}")
+        print(f"Query Error: {e}")
         return []
 
-# [FIX: ROBUST INIT DB]
 def init_db():
     queries = [
         '''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT, name TEXT)''',
@@ -137,26 +133,19 @@ def init_db():
         try:
             c = conn.cursor()
             for q in queries:
-                try:
-                    # Strip untuk menghapus whitespace aneh yang bisa memicu ValueError
-                    c.execute(q.strip())
-                except Exception as e:
-                    print(f"Init Table Error (Ignorable if exists): {e}")
+                try: c.execute(q.strip())
+                except: pass
             conn.commit()
             
-            # Cek user default hanya jika tabel users berhasil di-query
             try:
                 res = c.execute("SELECT count(*) as cnt FROM users").fetchone()
                 if res and res[0] == 0:
                     c.execute("INSERT INTO users VALUES (?, ?, ?, ?)", ('admin', '123', 'admin', 'Administrator'))
                     c.execute("INSERT INTO users VALUES (?, ?, ?, ?)", ('siswa1', '123', 'student', 'Budi Santoso'))
                     conn.commit()
-            except Exception: pass
-            
-        except Exception as e:
-            st.error(f"Database Init Critical Error: {e}")
+            except: pass
+        except Exception as e: st.error(f"DB Init Error: {e}")
 
-# Jalankan init
 init_db()
 
 # --- DATABASE HELPERS ---
@@ -238,12 +227,10 @@ def clear_student_attempt(name, cat):
     run_query("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
 
 def save_single_answer(name, cat, q_id, ans, doubt):
-    # Simpan jawaban tunggal
     doubt_val = 1 if doubt else 0
     run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, q_id, ans, doubt_val))
 
 def save_bulk_answers(name, cat, answers_dict):
-    """Batch Save"""
     conn = get_db_connection()
     if not conn: return
     c = conn.cursor()
@@ -255,8 +242,7 @@ def save_bulk_answers(name, cat, answers_dict):
             if ans:
                 c.execute("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, qid, ans, doubt_val))
         conn.commit()
-    except Exception as e:
-        print(f"Save Error: {e}")
+    except Exception as e: print(f"Save Error: {e}")
 
 def get_temp_answers_full(name, cat):
     rows = run_query("SELECT question_id, answer, is_doubtful FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
@@ -288,13 +274,13 @@ for k in ['admin_active_category','edit_target_user','edit_q_id','edit_material_
     if k not in st.session_state: st.session_state[k] = None
 
 def check_session_persistence():
-    # 1. Login Persistence
+    # Login Persistence
     if st.session_state['current_user'] is None and "u_id" in st.query_params:
         user_data = get_user(st.query_params["u_id"])
         if user_data: 
             st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
     
-    # 2. Exam Persistence (Agar tidak balik ke awal saat refresh)
+    # Exam Persistence (Agar tidak balik ke awal saat refresh)
     if "cat" in st.query_params:
         if st.session_state['selected_exam_cat'] is None:
             st.session_state['selected_exam_cat'] = st.query_params["cat"]
@@ -422,7 +408,6 @@ def admin_dashboard():
     # --- TAB 2: BANK SOAL ---
     with tab2:
         if not st.session_state['admin_active_category']:
-            # Ambil kategori unik dengan aman
             ex_data = get_exams()
             cats = sorted(list(set([e['category'] for e in ex_data]))) if ex_data else []
             c1,c2=st.columns(2); pc=c1.selectbox("Pilih Kategori", ["--"]+cats); ic=c2.text_input("Buat Baru")
@@ -590,10 +575,8 @@ def student_dashboard():
     # [HELPER: COLLECT ALL WIDGET VALUES] (Dipanggil saat Submit/Timeout)
     def collect_all_answers_from_widgets(cat_name):
         current_answers = st.session_state['local_answers'].get(cat_name, {})
-        # Loop semua soal di kategori ini
         raw_qs = [e for e in all_qs if e['category']==cat_name]
         for q in raw_qs:
-            # Ambil nilai langsung dari Widget jika ada
             w_ans = st.session_state.get(f"rad_{q['id']}")
             w_dbt = st.session_state.get(f"chk_{q['id']}")
             if w_ans is not None:
@@ -634,9 +617,8 @@ def student_dashboard():
                         st.download_button(f"⬇️ Download {r['file_name']}", r['file_data'], file_name=r['file_name'])
         else: st.info("Belum ada materi tersedia.")
 
-    # TAB UJIAN (PAGINATION)
+    # TAB UJIAN (GRID & PAGINATION)
     with tab2:
-        # Gunakan list comprehension aman
         cats = sorted(list(set([e['category'] for e in all_qs]))) if all_qs else []
         
         if st.session_state['selected_exam_cat'] is None:
@@ -660,7 +642,7 @@ def student_dashboard():
                             st.markdown(f"<div class='exam-card-header'>📚 {cat}</div>", unsafe_allow_html=True)
                             st.markdown(f"<div class='exam-card-info' style='color:{stat_col}'>{stat_txt}</div>", unsafe_allow_html=True)
                             if st.button(f"Buka Soal", key=f"open_{cat}", use_container_width=True):
-                                # [FIX: LOCK NAVIGATION VIA QUERY PARAMS]
+                                # [FIX: LOCK NAVIGATION & DELAY]
                                 st.session_state['selected_exam_cat'] = cat
                                 st.session_state.q_idx = 0
                                 st.query_params["cat"] = cat
@@ -702,7 +684,6 @@ def student_dashboard():
                     else:
                         if st.button("🚀 MULAI UJIAN", type="primary"):
                             start_student_exam(user['name'], pcat)
-                            # [FIX: DELAY AGAR DB SEMPAT SAVE]
                             time.sleep(1.0)
                             st.rerun()
             else:
@@ -711,23 +692,26 @@ def student_dashboard():
             if show_exam:
                 raw = [e for e in all_qs if e['category']==pcat]
                 
+                # Load Initial DB Data (Once)
                 if pcat not in st.session_state['local_answers']:
                     st.session_state['local_answers'][pcat] = get_temp_answers_full(user['name'], pcat)
                 
                 local_data = st.session_state['local_answers'][pcat]
                 
+                # --- UPDATE RAM FUNCTION (NO DB CALL) ---
                 def update_ram(qid):
                     ans = st.session_state.get(f"rad_{qid}")
                     dbt = st.session_state.get(f"chk_{qid}")
                     if ans: local_data[qid] = {'answer': ans, 'doubt': dbt}
 
+                # --- NAVIGASI ---
                 def go_jump(idx): 
                     curr_q = raw[st.session_state.q_idx]
                     if curr_q['id'] in local_data:
                         save_single_answer(user['name'], pcat, curr_q['id'], local_data[curr_q['id']]['answer'], local_data[curr_q['id']]['doubt'])
                     st.session_state.q_idx = idx
 
-                # --- SIDEBAR NAVIGATION ---
+                # --- SIDEBAR ---
                 with st.sidebar:
                     st.write("### 🧭 Navigasi Soal")
                     cols = st.columns(5)
@@ -744,7 +728,7 @@ def student_dashboard():
                         
                         if cols[i%5].button(label, key=f"nav_{i}", type=btn_type, on_click=go_jump, args=(i,)): pass
 
-                # --- DISPLAY CURRENT QUESTION ---
+                # --- DISPLAY ---
                 current_q = raw[st.session_state.q_idx]
                 q_id = current_q['id']
                 
@@ -761,7 +745,7 @@ def student_dashboard():
                         with c:
                             if current_q['opsi_img'][i] and isinstance(current_q['opsi_img'][i], bytes): st.image(current_q['opsi_img'][i], width=100)
 
-                # --- INPUTS (ON CHANGE -> UPDATE RAM ONLY) ---
+                # --- INPUTS ---
                 st.radio("Pilih Jawaban:", current_q['opsi'], index=idx_sel, key=f"rad_{q_id}", on_change=update_ram, args=(q_id,))
                 st.checkbox("🚩 Ragu-ragu", value=saved_val.get('doubt', False), key=f"chk_{q_id}", on_change=update_ram, args=(q_id,))
                 
