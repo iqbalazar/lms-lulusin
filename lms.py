@@ -49,9 +49,8 @@ st.markdown("""
     }
 
     /* 4. NAVIGASI SIDEBAR MENJADI BULAT (DOTS) */
-    /* Menargetkan tombol di dalam sidebar agar berbentuk lingkaran kecil */
     [data-testid="stSidebar"] button {
-        border-radius: 50% !important; /* Membuat bulat */
+        border-radius: 50% !important;
         width: 45px !important;
         height: 45px !important;
         padding: 0 !important;
@@ -66,13 +65,14 @@ st.markdown("""
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* 6. Admin Icon Buttons (Tetap Kotak Kecil) */
-    /* Kita kecualikan tombol admin dari style bulat di atas dengan selector spesifik */
-    .main button:has(p:contains("✏️")), .main button:has(p:contains("🗑️")) {
-        padding: 0px 8px !important;
+    /* 6. Admin & Logout Buttons (Normal/Kotak) */
+    /* Kecualikan tombol logout dan admin tools dari style bulat */
+    .main button:has(p:contains("✏️")), .main button:has(p:contains("🗑️")), 
+    div[data-testid="stSidebar"] button:has(p:contains("🚪")) {
+        padding: 0px 15px !important;
         border-radius: 4px !important;
         width: auto !important;
-        height: 32px !important;
+        height: auto !important;
         border: 1px solid rgba(128,128,128,0.2) !important;
     }
 
@@ -267,7 +267,8 @@ def login_page():
                 else: st.error("Username atau Password salah")
 
 def logout_button():
-    if st.sidebar.button("🚪 Keluar", type="primary"):
+    # [PERBAIKAN] Tombol Logout Normal
+    if st.sidebar.button("🚪 Keluar"): 
         st.session_state['current_user'] = None
         st.session_state['local_answers'] = {} 
         st.session_state.q_idx = 0
@@ -386,10 +387,18 @@ def admin_dashboard():
                 d_def = get_wib_now().date()
                 with st.form("schf"):
                     dr=st.date_input("Tanggal", [d_def, d_def])
-                    c1,c2=st.columns(2); op=c1.time_input("Buka"); cl=c2.time_input("Tutup")
-                    c3,c4=st.columns(2); du=c3.number_input("Durasi",60); mx=c4.number_input("Max Attempt",1)
+                    c1,c2=st.columns(2)
+                    # [PERBAIKAN] Time Input Flexible (step=60 detik)
+                    top=c1.time_input("Buka", get_wib_now().time(), step=60)
+                    cl=c2.time_input("Tutup", (get_wib_now()+timedelta(hours=4)).time(), step=60)
+                    
+                    c3,c4=st.columns(2)
+                    # [PERBAIKAN] Durasi Flexible (min 1, step 1)
+                    du=c3.number_input("Durasi (Menit)", min_value=1, value=60, step=1)
+                    mx=c4.number_input("Max Attempt", min_value=1, value=1)
+                    
                     if st.form_submit_button("Simpan"):
-                        fo = datetime.combine(dr[0],op).strftime("%Y-%m-%d %H:%M:%S")
+                        fo = datetime.combine(dr[0],top).strftime("%Y-%m-%d %H:%M:%S")
                         fc = datetime.combine(dr[1] if len(dr)>1 else dr[0], cl).strftime("%Y-%m-%d %H:%M:%S")
                         set_schedule(ac,fo,fc,du,mx); st.success("OK")
 
@@ -648,9 +657,7 @@ def student_dashboard():
                     ans = st.session_state.get(f"rad_{curr_q_id}")
                     dbt = st.session_state.get(f"chk_{curr_q_id}", False)
                     if ans:
-                        # Update Local State
                         local_data[curr_q_id] = {'answer': ans, 'doubt': dbt}
-                        # Update DB (Background)
                         save_single_answer(user['name'], pcat, curr_q_id, ans, dbt)
 
                 # --- CALLBACKS UNTUK NAVIGASI (INSTANT UPDATE) ---
@@ -676,9 +683,9 @@ def student_dashboard():
                         d = local_data.get(q['id'], {})
                         # Color Logic
                         if i == st.session_state.q_idx: btn_type = "primary" # Active
-                        elif d.get('doubt'): btn_type = "secondary" # Ragu (Kuning)
-                        elif d.get('answer'): btn_type = "secondary" # Done (Hijau)
-                        else: btn_type = "secondary" # Empty (Gray)
+                        elif d.get('doubt'): btn_type = "secondary" # Ragu (Kuning tidak ada, pakai emoji)
+                        elif d.get('answer'): btn_type = "secondary" # Done
+                        else: btn_type = "secondary" # Empty
                         
                         # Emoji Label (Dot Style)
                         label = str(i+1)
@@ -712,7 +719,7 @@ def student_dashboard():
                 
                 st.divider()
                 
-                # NAVIGASI BUTTONS (NEXT/PREV)
+                # NAVIGASI BUTTONS (PREV - NEXT)
                 c_prev, c_dbt, c_next = st.columns([1, 2, 1])
                 
                 c_prev.button("⬅️ Sebelumnya", disabled=(st.session_state.q_idx == 0), on_click=go_prev)
@@ -723,7 +730,7 @@ def student_dashboard():
                     if c_next.button("✅ Kirim Selesai", type="primary"):
                         save_current_q() # Save last answer
                         
-                        # Calculate Score
+                        # Calculate Final Score
                         ans_db = get_temp_answers_full(user['name'], pcat)
                         sc = sum([1 for s in raw if ans_db.get(s['id'],{}).get('answer') == s['jawaban']])
                         val = (sc/len(raw))*100 if raw else 0
