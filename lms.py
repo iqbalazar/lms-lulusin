@@ -65,7 +65,7 @@ st.markdown("""
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* Admin & Logout Buttons (Normal Box) - Override rounded style */
+    /* Admin & Logout Buttons (Normal Box) */
     .main button:has(p:contains("✏️")), .main button:has(p:contains("🗑️")), 
     div[data-testid="stSidebar"] button:has(p:contains("🚪")) {
         padding: 0px 15px !important;
@@ -521,7 +521,7 @@ def admin_dashboard():
                     if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. STUDENT DASHBOARD (PAGINATION)
+# 6. STUDENT DASHBOARD (LOGIKA FINAL)
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
@@ -549,30 +549,17 @@ def student_dashboard():
                 trigger_submit_final = True
                 target_cat_final = cat
 
-    # [HELPER: COLLECT ALL WIDGET VALUES] (Dipanggil saat Submit/Timeout)
-    def collect_all_answers_from_widgets(cat_name):
-        current_answers = st.session_state['local_answers'].get(cat_name, {})
-        # Loop semua soal di kategori ini
-        raw_qs = [e for e in all_qs if e['category']==cat_name]
-        for q in raw_qs:
-            # Ambil nilai langsung dari Widget jika ada
-            w_ans = st.session_state.get(f"rad_{q['id']}")
-            w_dbt = st.session_state.get(f"chk_{q['id']}")
-            if w_ans is not None:
-                current_answers[q['id']] = {'answer': w_ans, 'doubt': w_dbt}
-        return current_answers
-
     # [SUBMIT OTOMATIS (WAKTU HABIS)]
     if trigger_submit_final and target_cat_final:
-        # 1. Ambil paksa semua jawaban dari Widget saat ini
-        final_answers = collect_all_answers_from_widgets(target_cat_final)
+        # Ambil state terakhir dari RAM sebelum simpan ke DB
+        if target_cat_final in st.session_state['local_answers']:
+            save_bulk_answers(user['name'], target_cat_final, st.session_state['local_answers'][target_cat_final])
         
-        # 2. Simpan Batch ke DB
-        save_bulk_answers(user['name'], target_cat_final, final_answers)
-        
-        # 3. Hitung Nilai dari Data Final
+        # Hitung Nilai dengan mengambil data TERBARU dari RAM (bukan DB yang mungkin belum sync)
+        final_answers = st.session_state['local_answers'].get(target_cat_final, {})
         raw=[e for e in all_qs if e['category']==target_cat_final]
-        # Kita pakai data dari RAM final_answers untuk scoring agar akurat 100%
+        
+        # Scoring logic using RAM data
         sc=sum([1 for s in raw if final_answers.get(s['id'],{}).get('answer') == s['jawaban']])
         val=(sc/len(raw))*100 if raw else 0
         
@@ -674,52 +661,41 @@ def student_dashboard():
                 if pcat not in st.session_state['local_answers']:
                     st.session_state['local_answers'][pcat] = get_temp_answers_full(user['name'], pcat)
                 
+                # Alias agar kode lebih pendek
                 local_data = st.session_state['local_answers'][pcat]
                 
-                # --- HELPER: SAVE CURRENT ANSWER BEFORE MOVE ---
-                def save_current_q():
-                    curr_q_id = raw[st.session_state.q_idx]['id']
-                    ans = st.session_state.get(f"rad_{curr_q_id}")
-                    dbt = st.session_state.get(f"chk_{curr_q_id}", False)
+                # --- UPDATE RAM FUNCTION (NO DB CALL) ---
+                def update_ram(qid):
+                    # Callback ini hanya update Session State
+                    ans = st.session_state.get(f"rad_{qid}")
+                    dbt = st.session_state.get(f"chk_{qid}")
                     if ans:
-                        # Update Local State
-                        local_data[curr_q_id] = {'answer': ans, 'doubt': dbt}
-                        # Update DB (Background - Single Row)
-                        save_single_answer(user['name'], pcat, curr_q_id, ans, dbt)
+                        local_data[qid] = {'answer': ans, 'doubt': dbt}
 
-                # --- CALLBACKS UNTUK NAVIGASI (INSTANT UPDATE) ---
-                def go_next():
-                    save_current_q()
-                    if st.session_state.q_idx < len(raw) - 1:
-                        st.session_state.q_idx += 1
-
-                def go_prev():
-                    save_current_q()
-                    if st.session_state.q_idx > 0:
-                        st.session_state.q_idx -= 1
-                
-                def go_jump(idx):
-                    save_current_q()
+                # --- NAVIGASI ---
+                def go_jump(idx): 
+                    # Simpan soal saat ini ke DB (Background) sebelum pindah
+                    curr_q = raw[st.session_state.q_idx]
+                    if curr_q['id'] in local_data:
+                        save_single_answer(user['name'], pcat, curr_q['id'], local_data[curr_q['id']]['answer'], local_data[curr_q['id']]['doubt'])
                     st.session_state.q_idx = idx
 
-                # --- SIDEBAR NAVIGATION (CLICKABLE DOTS) ---
+                # --- SIDEBAR NAVIGATION (READ RAM) ---
                 with st.sidebar:
                     st.write("### 🧭 Navigasi Soal")
                     cols = st.columns(5)
                     for i, q in enumerate(raw):
                         d = local_data.get(q['id'], {})
-                        # Color Logic
+                        # Warna langsung berubah karena baca dari local_data (RAM)
                         if i == st.session_state.q_idx: btn_type = "primary" # Active
-                        elif d.get('doubt'): btn_type = "secondary" # Ragu (Kuning tidak ada, pakai emoji)
-                        elif d.get('answer'): btn_type = "secondary" # Done
-                        else: btn_type = "secondary" # Empty
+                        elif d.get('doubt'): btn_type = "secondary" 
+                        elif d.get('answer'): btn_type = "primary" # Done
+                        else: btn_type = "secondary" 
                         
-                        # Emoji Label (Dot Style)
                         label = str(i+1)
                         if d.get('doubt'): label = f"⚠️ {i+1}"
                         elif d.get('answer'): label = f"✅ {i+1}"
                         
-                        # Button with Callback
                         if cols[i%5].button(label, key=f"nav_{i}", type=btn_type, on_click=go_jump, args=(i,)):
                             pass
 
@@ -740,33 +716,38 @@ def student_dashboard():
                         with c:
                             if current_q['opsi_img'][i] and isinstance(current_q['opsi_img'][i], bytes): st.image(current_q['opsi_img'][i], width=100)
 
-                # INPUTS (RADIO & CHECKBOX)
-                st.radio("Pilih Jawaban:", current_q['opsi'], index=idx_sel, key=f"rad_{q_id}")
-                st.checkbox("🚩 Ragu-ragu", value=saved_val.get('doubt', False), key=f"chk_{q_id}")
+                # --- INPUTS (ON CHANGE -> UPDATE RAM ONLY) ---
+                st.radio("Pilih Jawaban:", current_q['opsi'], index=idx_sel, key=f"rad_{q_id}", on_change=update_ram, args=(q_id,))
+                st.checkbox("🚩 Ragu-ragu", value=saved_val.get('doubt', False), key=f"chk_{q_id}", on_change=update_ram, args=(q_id,))
                 
                 st.divider()
                 
-                # NAVIGASI BUTTONS (PREV - NEXT - SUBMIT)
+                # --- BUTTONS ---
                 c_prev, c_dbt, c_next = st.columns([1, 2, 1])
                 
-                # Tombol PREV
-                c_prev.button("⬅️ Sebelumnya", disabled=(st.session_state.q_idx == 0), on_click=go_prev)
+                if c_prev.button("⬅️ Sebelumnya", disabled=(st.session_state.q_idx == 0)):
+                    # Save DB saat pindah
+                    if q_id in local_data: save_single_answer(user['name'], pcat, q_id, local_data[q_id]['answer'], local_data[q_id]['doubt'])
+                    st.session_state.q_idx -= 1
+                    st.rerun()
 
-                # Tombol NEXT / SUBMIT
                 if st.session_state.q_idx < len(raw) - 1:
-                    c_next.button("Selanjutnya ➡️", type="primary", on_click=go_next)
+                    if c_next.button("Selanjutnya ➡️", type="primary"):
+                        # Save DB saat pindah
+                        if q_id in local_data: save_single_answer(user['name'], pcat, q_id, local_data[q_id]['answer'], local_data[q_id]['doubt'])
+                        st.session_state.q_idx += 1
+                        st.rerun()
                 else:
-                    # [FIX: Tombol Submit di halaman terakhir]
                     if c_next.button("✅ Kirim Selesai", type="primary"):
-                        # Simpan soal terakhir (dari Widget ke RAM -> DB)
-                        save_current_q()
+                        # Save Last Question to DB
+                        if q_id in local_data: save_single_answer(user['name'], pcat, q_id, local_data[q_id]['answer'], local_data[q_id]['doubt'])
                         
-                        # Ambil semua jawaban dari RAM (Local State) untuk scoring
-                        # Ini PENTING agar nilai tidak 0
+                        # Hitung Nilai dari RAM (Data Paling Update)
                         final_answers = local_data
+                        
+                        # Save All Batch (Backup)
                         save_bulk_answers(user['name'], pcat, final_answers)
                         
-                        # Hitung Skor
                         sc = sum([1 for s in raw if final_answers.get(s['id'],{}).get('answer') == s['jawaban']])
                         val = (sc/len(raw))*100 if raw else 0
                         
