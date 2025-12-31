@@ -51,8 +51,8 @@ st.markdown("""
     /* 4. NAVIGASI SIDEBAR BULAT (DOTS) */
     [data-testid="stSidebar"] button {
         border-radius: 50% !important;
-        width: 40px !important;
-        height: 40px !important;
+        width: 45px !important;
+        height: 45px !important;
         padding: 0 !important;
         font-weight: bold !important;
         font-size: 14px !important;
@@ -65,7 +65,7 @@ st.markdown("""
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* Override tombol Admin/Logout agar KOTAK (tidak bulat) */
+    /* Admin & Logout Buttons (Normal Box) */
     .main button:has(p:contains("✏️")), .main button:has(p:contains("🗑️")), 
     div[data-testid="stSidebar"] button:has(p:contains("🚪")) {
         padding: 0px 15px !important;
@@ -214,12 +214,12 @@ def clear_student_attempt(name, cat):
     run_query("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
 
 def save_single_answer(name, cat, q_id, ans, doubt):
-    # Simpan satu jawaban ke DB (Background)
+    # Simpan jawaban tunggal
     doubt_val = 1 if doubt else 0
     run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, q_id, ans, doubt_val))
 
 def save_bulk_answers(name, cat, answers_dict):
-    """Save Batch to DB"""
+    """Batch Save"""
     conn = get_db_connection()
     if not conn: return
     c = conn.cursor()
@@ -250,24 +250,26 @@ def delete_banner(bid): run_query("DELETE FROM banners WHERE id=?", (bid,))
 # ==========================================
 # 3. AUTH & SESSION
 # ==========================================
+# [FIX: INITIALIZE VARIABLES CAREFULLY TO PREVENT RESET]
 if 'current_user' not in st.session_state: st.session_state['current_user'] = None
-for k in ['admin_active_category','edit_target_user','edit_q_id','selected_exam_cat','edit_material_id']:
-    if k not in st.session_state: st.session_state[k] = None
-
-# [STATE BARU UNTUK NAVIGASI PAGINATION & BUFFER]
+if 'selected_exam_cat' not in st.session_state: st.session_state['selected_exam_cat'] = None
 if 'q_idx' not in st.session_state: st.session_state.q_idx = 0
 if 'local_answers' not in st.session_state: st.session_state['local_answers'] = {}
 
+# Admin states
+for k in ['admin_active_category','edit_target_user','edit_q_id','edit_material_id']:
+    if k not in st.session_state: st.session_state[k] = None
+
 def check_session_persistence():
-    # Cek query params untuk persistent login
+    # Login Persistence via URL params
     if st.session_state['current_user'] is None and "u_id" in st.query_params:
         user_data = get_user(st.query_params["u_id"])
         if user_data: 
             st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
     
-    # [FIX: FORCE EXAM CATEGORY FROM URL]
-    # Jika URL punya parameter 'cat', paksa session state untuk ikut
-    if "cat" in st.query_params:
+    # [FIX: FORCE KEEP EXAM CATEGORY]
+    # Jangan reset ke None jika sudah ada di URL
+    if "cat" in st.query_params and st.session_state['selected_exam_cat'] is None:
         st.session_state['selected_exam_cat'] = st.query_params["cat"]
 
 def login_page():
@@ -291,7 +293,7 @@ def logout_button():
         st.session_state['current_user'] = None
         st.session_state['local_answers'] = {} 
         st.session_state.q_idx = 0
-        for k in ['edit_q_id', 'edit_material_id', 'selected_exam_cat', 'admin_active_category']: st.session_state[k] = None
+        st.session_state['selected_exam_cat'] = None # Clear exam
         st.query_params.clear(); st.rerun()
 
 # ==========================================
@@ -527,7 +529,7 @@ def admin_dashboard():
                     if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. STUDENT DASHBOARD (PAGINATION)
+# 6. STUDENT DASHBOARD (LOGIKA FINAL)
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
