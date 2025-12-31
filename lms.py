@@ -51,12 +51,12 @@ st.markdown("""
     /* 4. NAVIGASI SIDEBAR BULAT (DOTS) */
     [data-testid="stSidebar"] button {
         border-radius: 50% !important;
-        width: 45px !important;
-        height: 45px !important;
+        width: 40px !important;
+        height: 40px !important;
         padding: 0 !important;
         font-weight: bold !important;
         font-size: 14px !important;
-        margin: 2px !important;
+        margin: 3px !important;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         border: 1px solid rgba(0,0,0,0.1);
     }
@@ -250,7 +250,7 @@ def delete_banner(bid): run_query("DELETE FROM banners WHERE id=?", (bid,))
 # ==========================================
 # 3. AUTH & SESSION
 # ==========================================
-# [FIX: INITIALIZE VARIABLES CAREFULLY TO PREVENT RESET]
+# Inisialisasi State dengan hati-hati agar tidak reset
 if 'current_user' not in st.session_state: st.session_state['current_user'] = None
 if 'selected_exam_cat' not in st.session_state: st.session_state['selected_exam_cat'] = None
 if 'q_idx' not in st.session_state: st.session_state.q_idx = 0
@@ -261,16 +261,16 @@ for k in ['admin_active_category','edit_target_user','edit_q_id','edit_material_
     if k not in st.session_state: st.session_state[k] = None
 
 def check_session_persistence():
-    # Login Persistence via URL params
+    # 1. Login Persistence
     if st.session_state['current_user'] is None and "u_id" in st.query_params:
         user_data = get_user(st.query_params["u_id"])
         if user_data: 
             st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
     
-    # [FIX: FORCE KEEP EXAM CATEGORY]
-    # Jangan reset ke None jika sudah ada di URL
-    if "cat" in st.query_params and st.session_state['selected_exam_cat'] is None:
-        st.session_state['selected_exam_cat'] = st.query_params["cat"]
+    # 2. Exam Persistence (Agar tidak balik ke awal saat refresh)
+    if "cat" in st.query_params:
+        if st.session_state['selected_exam_cat'] is None:
+            st.session_state['selected_exam_cat'] = st.query_params["cat"]
 
 def login_page():
     st.write(""); st.write(""); st.write("")
@@ -293,7 +293,7 @@ def logout_button():
         st.session_state['current_user'] = None
         st.session_state['local_answers'] = {} 
         st.session_state.q_idx = 0
-        st.session_state['selected_exam_cat'] = None # Clear exam
+        st.session_state['selected_exam_cat'] = None
         st.query_params.clear(); st.rerun()
 
 # ==========================================
@@ -529,7 +529,7 @@ def admin_dashboard():
                     if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. STUDENT DASHBOARD (LOGIKA FINAL)
+# 6. STUDENT DASHBOARD (PAGINATION)
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
@@ -675,7 +675,10 @@ def student_dashboard():
                     elif now_wib > cdt: st.error("Ujian sudah ditutup.")
                     else:
                         if st.button("🚀 MULAI UJIAN", type="primary"):
-                            start_student_exam(user['name'], pcat); st.rerun()
+                            start_student_exam(user['name'], pcat)
+                            # [FIX: DELAY AGAR DB SEMPAT SAVE]
+                            time.sleep(1.0)
+                            st.rerun()
             else:
                 st.info("Mode Latihan (Tanpa Batas Waktu)"); show_exam = True
 
