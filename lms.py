@@ -56,7 +56,7 @@ st.markdown("""
         padding: 0 !important;
         font-weight: bold !important;
         font-size: 14px !important;
-        margin: 3px !important;
+        margin: 2px !important;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         border: 1px solid rgba(0,0,0,0.1);
     }
@@ -284,9 +284,9 @@ def check_session_persistence():
             st.session_state['current_user'] = {"username": user_data['username'], "role": user_data['role'], "name": user_data['name']}
     
     # 2. Exam Persistence (Agar tidak balik ke awal saat refresh)
-    # [FIX: PRIORITIZE URL PARAM]
     if "cat" in st.query_params:
-        st.session_state['selected_exam_cat'] = st.query_params["cat"]
+        if st.session_state['selected_exam_cat'] is None:
+            st.session_state['selected_exam_cat'] = st.query_params["cat"]
 
 def login_page():
     st.write(""); st.write(""); st.write("")
@@ -577,16 +577,26 @@ def student_dashboard():
 
     # [SUBMIT OTOMATIS (WAKTU HABIS)]
     if trigger_submit_final and target_cat_final:
-        # [FIX] Nilai 0 -> Ambil jawaban terakhir dari RAM
-        final_answers = st.session_state['local_answers'].get(target_cat_final, {})
+        # [FIX] Nilai 0 -> Ambil FORCE dari RAM
         
-        # Merge dengan data dari DB (jika ada yg sudah tersimpan sebelumnya)
-        db_answers = get_temp_answers_full(user['name'], target_cat_final)
-        for k, v in db_answers.items():
-            if k not in final_answers: final_answers[k] = v
+        # 1. Update State Current Question (Widget to RAM)
+        if 'selected_exam_cat' in st.session_state:
+            # Karena widget mungkin sudah hilang, kita hanya bisa mengandalkan local_answers
+            pass
             
+        # 2. Merge DB dan RAM
+        final_answers = get_temp_answers_full(user['name'], target_cat_final) # DB base
+        
+        # Timpa dengan RAM (jika ada yg lebih baru)
+        if target_cat_final in st.session_state['local_answers']:
+            ram_data = st.session_state['local_answers'][target_cat_final]
+            for qid, val in ram_data.items():
+                final_answers[qid] = val
+        
+        # 3. Save Final State
         save_bulk_answers(user['name'], target_cat_final, final_answers)
         
+        # 4. Grading
         raw=[e for e in all_qs if e['category']==target_cat_final]
         sc=sum([1 for s in raw if final_answers.get(s['id'],{}).get('answer') == s['jawaban']])
         val=(sc/len(raw))*100 if raw else 0
