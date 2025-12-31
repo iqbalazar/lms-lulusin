@@ -24,10 +24,10 @@ st.set_page_config(
 def get_wib_now():
     return datetime.now(pytz.timezone('Asia/Jakarta')).replace(tzinfo=None)
 
-# --- CUSTOM CSS ---
+# --- CUSTOM CSS (NAVIGASI BULAT & UI BERSIH) ---
 st.markdown("""
 <style>
-    /* 1. Global */
+    /* 1. Global Font */
     html, body, [class*="css"] { font-family: 'Segoe UI', Roboto, sans-serif; }
 
     /* 2. Card Containers */
@@ -48,30 +48,33 @@ st.markdown("""
         background-color: var(--bg-card);
     }
 
-    /* 4. Sidebar Nav Button Customization */
-    /* Mengubah tombol default streamlit menjadi kotak kecil untuk navigasi */
-    div[data-testid="stSidebar"] button {
-        width: 100%;
-        padding: 5px !important;
-        font-weight: bold;
-        border-radius: 5px;
-        margin-bottom: 2px;
+    /* 4. NAVIGASI SIDEBAR MENJADI BULAT (DOTS) */
+    /* Menargetkan tombol di dalam sidebar agar berbentuk lingkaran kecil */
+    [data-testid="stSidebar"] button {
+        border-radius: 50% !important; /* Membuat bulat */
+        width: 45px !important;
+        height: 45px !important;
+        padding: 0 !important;
+        font-weight: bold !important;
+        font-size: 14px !important;
+        margin: 2px !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border: 1px solid rgba(0,0,0,0.1);
     }
-
+    
     /* 5. Grid Exam */
     .exam-card-header { font-size: 1.2rem; font-weight: 700; margin-bottom: 5px; }
     .exam-card-info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 15px; }
     
-    /* 6. Icon Buttons (Admin) */
-    button:has(p:contains("✏️")), button:has(p:contains("🗑️")) {
+    /* 6. Admin Icon Buttons (Tetap Kotak Kecil) */
+    /* Kita kecualikan tombol admin dari style bulat di atas dengan selector spesifik */
+    .main button:has(p:contains("✏️")), .main button:has(p:contains("🗑️")) {
         padding: 0px 8px !important;
         border-radius: 4px !important;
-        min-height: 32px !important; height: 32px !important;
+        width: auto !important;
+        height: 32px !important;
         border: 1px solid rgba(128,128,128,0.2) !important;
-        margin: 0px !important;
     }
-    button:has(p:contains("✏️")):hover { border-color: #f1c40f !important; color: #f1c40f !important; }
-    button:has(p:contains("🗑️")):hover { border-color: #e74c3c !important; color: #e74c3c !important; }
 
     /* 7. General */
     .stTabs [data-baseweb="tab-list"] { gap: 15px; }
@@ -213,7 +216,7 @@ def clear_student_attempt(name, cat):
     run_query("DELETE FROM student_answers_temp WHERE student_name=? AND category=?", (name, cat))
 
 def save_single_answer(name, cat, q_id, ans, doubt):
-    """Simpan jawaban tunggal ke database"""
+    # Simpan jawaban tunggal
     doubt_val = 1 if doubt else 0
     run_query("REPLACE INTO student_answers_temp (student_name, category, question_id, answer, is_doubtful) VALUES (?, ?, ?, ?, ?)", (name, cat, q_id, ans, doubt_val))
 
@@ -500,7 +503,7 @@ def admin_dashboard():
                     if st.form_submit_button("Batal"): st.session_state['edit_target_user']=None; st.rerun()
 
 # ==========================================
-# 6. STUDENT DASHBOARD (PAGINATION MODE)
+# 6. STUDENT DASHBOARD (PAGINATION)
 # ==========================================
 def student_dashboard():
     user = st.session_state['current_user']
@@ -530,13 +533,10 @@ def student_dashboard():
 
     # [SUBMIT OTOMATIS (WAKTU HABIS)]
     if trigger_submit_final and target_cat_final:
-        # Simpan jawaban terakhir jika ada di state
         if target_cat_final in st.session_state['local_answers']:
-            # Simpan satu-satu untuk memastikan aman
             for qid, val in st.session_state['local_answers'][target_cat_final].items():
                 save_single_answer(user['name'], target_cat_final, qid, val['answer'], val['doubt'])
         
-        # Hitung Nilai
         raw=[e for e in all_qs if e['category']==target_cat_final]
         ans=get_temp_answers_full(user['name'], target_cat_final)
         sc=sum([1 for s in raw if ans.get(s['id'],{}).get('answer')==s['jawaban']])
@@ -642,47 +642,60 @@ def student_dashboard():
                 
                 local_data = st.session_state['local_answers'][pcat]
                 
-                # --- SIDEBAR NAVIGATION (CLICKABLE) ---
+                # --- HELPER: SAVE CURRENT ANSWER BEFORE MOVE ---
+                def save_current_q():
+                    curr_q_id = raw[st.session_state.q_idx]['id']
+                    ans = st.session_state.get(f"rad_{curr_q_id}")
+                    dbt = st.session_state.get(f"chk_{curr_q_id}", False)
+                    if ans:
+                        # Update Local State
+                        local_data[curr_q_id] = {'answer': ans, 'doubt': dbt}
+                        # Update DB (Background)
+                        save_single_answer(user['name'], pcat, curr_q_id, ans, dbt)
+
+                # --- CALLBACKS UNTUK NAVIGASI (INSTANT UPDATE) ---
+                def go_next():
+                    save_current_q()
+                    if st.session_state.q_idx < len(raw) - 1:
+                        st.session_state.q_idx += 1
+
+                def go_prev():
+                    save_current_q()
+                    if st.session_state.q_idx > 0:
+                        st.session_state.q_idx -= 1
+                
+                def go_jump(idx):
+                    save_current_q()
+                    st.session_state.q_idx = idx
+
+                # --- SIDEBAR NAVIGATION (CLICKABLE DOTS) ---
                 with st.sidebar:
                     st.write("### 🧭 Navigasi Soal")
                     cols = st.columns(5)
                     for i, q in enumerate(raw):
                         d = local_data.get(q['id'], {})
-                        # Tentukan warna
-                        if i == st.session_state.q_idx: btn_type = "primary" # Soal Aktif
-                        elif d.get('doubt'): btn_type = "secondary" # Ragu (Kuning tidak ada di native button, pakai secondary)
-                        elif d.get('answer'): btn_type = "secondary" # Sudah jawab (Hijau tidak ada, pakai secondary)
-                        else: btn_type = "secondary" # Belum jawab
+                        # Color Logic
+                        if i == st.session_state.q_idx: btn_type = "primary" # Active
+                        elif d.get('doubt'): btn_type = "secondary" # Ragu (Kuning)
+                        elif d.get('answer'): btn_type = "secondary" # Done (Hijau)
+                        else: btn_type = "secondary" # Empty (Gray)
                         
-                        # Emoji Status
+                        # Emoji Label (Dot Style)
                         label = str(i+1)
-                        if d.get('doubt'): label += " 🚩"
-                        elif d.get('answer'): label += " ✅"
+                        if d.get('doubt'): label = f"⚠️ {i+1}"
+                        elif d.get('answer'): label = f"✅ {i+1}"
                         
-                        # Tombol Navigasi
-                        if cols[i%5].button(label, key=f"nav_{i}", type=btn_type):
-                            # Sebelum pindah, SAVE jawaban soal yang sedang aktif
-                            curr_q_id = raw[st.session_state.q_idx]['id']
-                            ans = st.session_state.get(f"rad_{curr_q_id}")
-                            dbt = st.session_state.get(f"chk_{curr_q_id}", False)
-                            if ans:
-                                local_data[curr_q_id] = {'answer': ans, 'doubt': dbt}
-                                save_single_answer(user['name'], pcat, curr_q_id, ans, dbt)
-                            
-                            st.session_state.q_idx = i
-                            st.rerun()
+                        # Button with Callback
+                        if cols[i%5].button(label, key=f"nav_{i}", type=btn_type, on_click=go_jump, args=(i,)):
+                            pass
 
-                # --- DISPLAY CURRENT QUESTION (PAGINATION) ---
+                # --- DISPLAY CURRENT QUESTION ---
                 current_q = raw[st.session_state.q_idx]
                 q_id = current_q['id']
                 
-                # Get saved value
                 saved_val = local_data.get(q_id, {})
-                prev_ans = saved_val.get('answer')
-                prev_dbt = saved_val.get('doubt', False)
-                idx_sel = current_q['opsi'].index(prev_ans) if prev_ans in current_q['opsi'] else None
+                idx_sel = current_q['opsi'].index(saved_val.get('answer')) if saved_val.get('answer') in current_q['opsi'] else None
 
-                # Card Soal
                 st.markdown(f"#### Soal No. {st.session_state.q_idx + 1}")
                 st.markdown(f"<div class='question-container'>{current_q['tanya']}</div>", unsafe_allow_html=True)
                 if current_q['q_img'] and isinstance(current_q['q_img'], bytes): st.image(current_q['q_img'], width=400)
@@ -693,40 +706,24 @@ def student_dashboard():
                         with c:
                             if current_q['opsi_img'][i] and isinstance(current_q['opsi_img'][i], bytes): st.image(current_q['opsi_img'][i], width=100)
 
-                # INPUT AREA (Tanpa Form agar Navigasi Sidebar Live Update saat klik Next/Prev)
-                sel_answer = st.radio("Pilih Jawaban:", current_q['opsi'], index=idx_sel, key=f"rad_{q_id}")
-                is_doubt = st.checkbox("🚩 Ragu-ragu", value=prev_dbt, key=f"chk_{q_id}")
+                # INPUTS
+                st.radio("Pilih Jawaban:", current_q['opsi'], index=idx_sel, key=f"rad_{q_id}")
+                st.checkbox("🚩 Ragu-ragu", value=saved_val.get('doubt', False), key=f"chk_{q_id}")
                 
                 st.divider()
                 
-                # NAVIGASI BUTTONS (PREV - NEXT)
+                # NAVIGASI BUTTONS (NEXT/PREV)
                 c_prev, c_dbt, c_next = st.columns([1, 2, 1])
                 
-                # Tombol BACK
-                if c_prev.button("⬅️ Sebelumnya", disabled=(st.session_state.q_idx == 0)):
-                    # Save Current
-                    local_data[q_id] = {'answer': sel_answer, 'doubt': is_doubt}
-                    save_single_answer(user['name'], pcat, q_id, sel_answer, is_doubt)
-                    # Move
-                    st.session_state.q_idx -= 1
-                    st.rerun()
+                c_prev.button("⬅️ Sebelumnya", disabled=(st.session_state.q_idx == 0), on_click=go_prev)
 
-                # Tombol NEXT / FINISH
                 if st.session_state.q_idx < len(raw) - 1:
-                    if c_next.button("Selanjutnya ➡️", type="primary"):
-                        # Save Current
-                        local_data[q_id] = {'answer': sel_answer, 'doubt': is_doubt}
-                        save_single_answer(user['name'], pcat, q_id, sel_answer, is_doubt)
-                        # Move
-                        st.session_state.q_idx += 1
-                        st.rerun()
+                    c_next.button("Selanjutnya ➡️", type="primary", on_click=go_next)
                 else:
                     if c_next.button("✅ Kirim Selesai", type="primary"):
-                        # Save Last Question
-                        local_data[q_id] = {'answer': sel_answer, 'doubt': is_doubt}
-                        save_single_answer(user['name'], pcat, q_id, sel_answer, is_doubt)
+                        save_current_q() # Save last answer
                         
-                        # Calculate Final Score
+                        # Calculate Score
                         ans_db = get_temp_answers_full(user['name'], pcat)
                         sc = sum([1 for s in raw if ans_db.get(s['id'],{}).get('answer') == s['jawaban']])
                         val = (sc/len(raw))*100 if raw else 0
